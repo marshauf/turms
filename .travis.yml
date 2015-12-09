@@ -10,6 +10,7 @@ install:
   - go get golang.org/x/net/websocket
 
 script:
+  - go test -v ./...
   - go test -v -race ./...
 
 matrix:
