@@ -104,7 +104,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 	case *Unregister:
 		err := d.unregisterEndpoint(m.Registration, se.ID(), conn)
 		if err != nil {
-			errMsg := &Error{UnregisterCode, m.Request, map[string]interface{}{}, URI("wamp.error.no_such_registration"), nil, nil}
+			errMsg := &Error{UnregisterCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
 			if err == &NotAuthorized {
 				errMsg.Error = NotAuthorized
 			}
@@ -122,7 +122,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 	case *Call:
 		endpoint, procedureID, err := d.getEndpoint(m.Procedure)
 		if err != nil {
-			errMsg := &Error{CallCode, m.Request, map[string]interface{}{}, URI("wamp.error.no_such_registration"), nil, nil}
+			errMsg := &Error{CallCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
 			err = conn.Send(ctx, errMsg)
 			if err != nil {
 				return NewErrorContext(ctx, err)

@@ -514,7 +514,7 @@ func (c *Client) handle() {
 				reg, exist := c.cal.handler(m.Registration)
 				if !exist {
 					details := map[string]interface{}{}
-					resp := &Error{InvocationCode, m.Request, details, URI("wamp.error.no_such_procedure"), nil, nil}
+					resp := &Error{InvocationCode, m.Request, details, NoSuchProcedure, nil, nil}
 					err := c.Send(c.ctx, resp)
 					switch err {
 					case context.Canceled, context.DeadlineExceeded:
@@ -570,7 +570,7 @@ func (c *Client) handle() {
 func (c *Client) Close() error {
 	c.gdbyWait.Lock()
 
-	gdbye := &Goodbye{map[string]interface{}{}, URI("wamp.error.close_realm")}
+	gdbye := &Goodbye{map[string]interface{}{}, CloseRealm}
 	ctx, cancel := context.WithTimeout(c.ctx, c.timeout)
 	c.conn.Send(ctx, gdbye)
 	cancel()
