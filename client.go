@@ -124,7 +124,8 @@ func (c *Client) JoinRealm(ctx context.Context, realm URI, details Details) erro
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	msg := &Hello{realm, details.Details()}
-	ctxT, cancel := context.WithTimeout(ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	err := c.conn.Send(ctx, msg)
 	if err != nil {
 		return err
@@ -132,11 +133,10 @@ func (c *Client) JoinRealm(ctx context.Context, realm URI, details Details) erro
 	var (
 		resp Message
 	)
-	resp, err = waitForMessage(ctxT, c.conn, c.timeout)
+	resp, err = waitForMessage(ctx, c.conn, c.timeout)
 	if err != nil {
 		return err
 	}
-	cancel()
 
 	switch m := resp.(type) {
 	case *Welcome:
@@ -153,7 +153,7 @@ func (c *Client) JoinRealm(ctx context.Context, realm URI, details Details) erro
 
 type waitMsg struct {
 	msg Message
-	mu  sync.Mutex
+	c   chan struct{}
 }
 
 type waitCondHandler struct {
@@ -174,30 +174,32 @@ func (h *waitCondHandler) wake(resp Response) {
 		return
 	}
 	w.msg = resp
-	w.mu.Unlock()
+	close(w.c)
 }
 
 func (h *waitCondHandler) set(reqID ID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if _, ok := h.requests[reqID]; ok {
-		return
+	wm := &waitMsg{
+		c: make(chan struct{}),
 	}
-	wm := &waitMsg{}
-	wm.mu.Lock()
 	h.requests[reqID] = wm
 }
 
-func (h *waitCondHandler) wait(reqID ID) Message {
+func (h *waitCondHandler) wait(ctx context.Context, reqID ID) (Message, error) {
 	h.mu.RLock()
 	w, ok := h.requests[reqID]
 	h.mu.RUnlock()
 	if !ok {
-		return nil
+		h.set(reqID)
+		w = h.requests[reqID]
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.msg
+	select {
+	case <-w.c:
+		return w.msg, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 type subscriber struct {
@@ -255,13 +257,16 @@ func (c *Client) Subscribe(ctx context.Context, topic URI) (<-chan *Event, error
 	c.req.set(reqID)
 
 	req := &Subscribe{reqID, map[string]interface{}{}, URI(topic)}
-	ctx, cancel := context.WithTimeout(c.ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	if err := c.Send(ctx, req); err != nil {
 		return nil, err
 	}
-	cancel()
 
-	resp := c.req.wait(reqID)
+	resp, err := c.req.wait(ctx, reqID)
+	if err != nil {
+		return nil, err
+	}
 	switch m := resp.(type) {
 	case *Subscribed:
 		p := c.sub.subscribe(m.Subscription, topic)
@@ -272,7 +277,7 @@ func (c *Client) Subscribe(ctx context.Context, topic URI) (<-chan *Event, error
 	return nil, fmt.Errorf("Unknown message code response %d", resp.Code())
 }
 
-func (c *Client) Unsubscribe(topic URI) error {
+func (c *Client) Unsubscribe(ctx context.Context, topic URI) error {
 	subID, exist := c.sub.subscriptionID(topic)
 	if !exist {
 		return fmt.Errorf("No subscription to %s exists", topic)
@@ -281,13 +286,16 @@ func (c *Client) Unsubscribe(topic URI) error {
 	msg := &Unsubscribe{reqID, subID}
 
 	c.req.set(reqID)
-	ctx, cancel := context.WithTimeout(c.ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	if err := c.Send(ctx, msg); err != nil {
 		return err
 	}
-	cancel()
 
-	resp := c.req.wait(reqID)
+	resp, err := c.req.wait(ctx, reqID)
+	if err != nil {
+		return err
+	}
 	switch m := resp.(type) {
 	case *Unsubscribed:
 		return c.sub.unsubscribe(topic)
@@ -313,13 +321,16 @@ func (c *Client) Publish(ctx context.Context, options Options, topic URI, args [
 	}
 
 	c.req.set(reqID)
-	ctx, cancel := context.WithTimeout(c.ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	if err := c.Send(ctx, msg); err != nil {
 		return err
 	}
-	cancel()
 
-	resp := c.req.wait(reqID)
+	resp, err := c.req.wait(ctx, reqID)
+	if err != nil {
+		return err
+	}
 	switch m := resp.(type) {
 	case *Published:
 		return nil
@@ -383,13 +394,16 @@ func (c *Client) Register(ctx context.Context, name URI, h InvocationHandler) er
 	msg := &Register{reqID, options, name}
 
 	c.req.set(reqID)
-	ctx, cancel := context.WithTimeout(c.ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	if err := c.Send(ctx, msg); err != nil {
 		return err
 	}
-	cancel()
 
-	resp := c.req.wait(reqID)
+	resp, err := c.req.wait(ctx, reqID)
+	if err != nil {
+		return err
+	}
 	switch m := resp.(type) {
 	case *Registered:
 		c.cal.register(m.Registration, name, h)
@@ -409,13 +423,16 @@ func (c *Client) Unregister(ctx context.Context, name URI) error {
 	msg := &Unregister{reqID, procedureID}
 
 	c.req.set(reqID)
-	ctx, cancel := context.WithTimeout(c.ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	if err := c.Send(ctx, msg); err != nil {
 		return err
 	}
-	cancel()
 
-	resp := c.req.wait(reqID)
+	resp, err := c.req.wait(ctx, reqID)
+	if err != nil {
+		return err
+	}
 	switch m := resp.(type) {
 	case *Unregistered:
 		return c.cal.unregister(name)
@@ -425,20 +442,23 @@ func (c *Client) Unregister(ctx context.Context, name URI) error {
 	return fmt.Errorf("Unknown message code response %d", resp.Code())
 }
 
-func (c *Client) Call(procedure URI, args []interface{}, argsKW map[string]interface{}) (*Result, error) {
+func (c *Client) Call(ctx context.Context, procedure URI, args []interface{}, argsKW map[string]interface{}) (*Result, error) {
 	reqID := c.counter.Next()
 
 	options := map[string]interface{}{}
 	msg := &Call{reqID, options, procedure, args, argsKW}
 
 	c.req.set(reqID)
-	ctx, cancel := context.WithTimeout(c.ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	if err := c.Send(ctx, msg); err != nil {
 		return nil, err
 	}
-	cancel()
 
-	resp := c.req.wait(reqID)
+	resp, err := c.req.wait(ctx, reqID)
+	if err != nil {
+		return nil, err
+	}
 	switch m := resp.(type) {
 	case *Result:
 		return m, nil

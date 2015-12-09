@@ -100,7 +100,7 @@ func TestRouterBasicProfile(t *testing.T) {
 		t.Error(err)
 	}
 
-	res, err := caller.Call(procedureName, procedureArgs, procedureArgsKW)
+	res, err := caller.Call(context.Background(), procedureName, procedureArgs, procedureArgsKW)
 	if err != nil {
 		t.Error(err)
 	}
