@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"golang.org/x/net/context"
 	"golang.org/x/net/websocket"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -489,8 +488,6 @@ func (c *Client) handle() {
 				return
 			case nil:
 			}
-
-			log.Printf("[DEBUG][CLIENT %d]Message: %#v", c.sessionID, msg)
 
 			switch m := msg.(type) {
 			case *Welcome:

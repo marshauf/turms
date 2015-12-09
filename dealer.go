@@ -3,7 +3,6 @@ package turms
 import (
 	"fmt"
 	"golang.org/x/net/context"
-	"log"
 	"sync"
 )
 
@@ -131,34 +130,32 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, err)
 		}
 		invocationReqID := se.NextID()
+		d.invocations[invocationReqID] = conn
+		d.calls[invocationReqID] = m.Request
 		invocationMsg := &Invocation{invocationReqID, procedureID, map[string]interface{}{}, m.Args, m.ArgsKW}
 		err = endpoint.Send(ctx, invocationMsg)
 		if err != nil {
+			// TODO handle err
+			delete(d.invocations, invocationReqID)
+			delete(d.calls, invocationReqID)
 			return NewErrorContext(ctx, err)
 		}
-
-		d.invocations[invocationReqID] = conn
-		d.calls[invocationReqID] = m.Request
 	case *Yield:
 		caller, hasCaller := d.invocations[m.Request]
 		if !hasCaller {
-			log.Print("No caller found")
 			return NewErrorContext(ctx, fmt.Errorf("No caller found"))
 		}
 
 		callReqID, hasCallID := d.calls[m.Request]
 		if !hasCallID {
-			log.Print("No call ID found")
 			return NewErrorContext(ctx, fmt.Errorf("No call ID found"))
 		}
 		details := map[string]interface{}{}
 		resMsg := &Result{callReqID, details, m.Args, m.ArgsKW}
 		err := caller.Send(ctx, resMsg)
 		if err != nil {
-			log.Print(err)
 			return NewErrorContext(ctx, err)
 		}
-		log.Printf("[DEBUG]Yield: %#v send to request %d", resMsg, m.Request)
 	case *Error:
 		if m.ErrCode != InvocationCode {
 			return ctx

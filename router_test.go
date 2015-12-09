@@ -2,6 +2,7 @@ package turms
 
 import (
 	"golang.org/x/net/context"
+	"log"
 	"sync"
 	"testing"
 )
@@ -10,14 +11,43 @@ const (
 	realmName = "test"
 )
 
+type logHandler struct {
+	logf func(format string, v ...interface{})
+}
+
+func (h *logHandler) Handle(ctx context.Context, c Conn, msg Message) context.Context {
+	se, ok := SessionFromContext(ctx)
+	if !ok {
+		h.logf("[DEBUG][UnknownSession]: %#v", msg)
+		return ctx
+	}
+	h.logf("[DEBUG][%d]: %#v", se.ID(), msg)
+	return ctx
+}
+
 func TestRouterBasicProfile(t *testing.T) {
 	router := NewRouter()
-	router.Handler = &Chain{
-		Realm(realmName),
-		&Chain{
-			Broker(),
-			Dealer(),
-		},
+
+	verbose := true
+	if verbose {
+		router.Handler = &Chain{
+			Realm(realmName),
+			&logHandler{
+				log.Printf,
+			},
+			&Chain{
+				Broker(),
+				Dealer(),
+			},
+		}
+	} else {
+		router.Handler = &Chain{
+			Realm(realmName),
+			&Chain{
+				Broker(),
+				Dealer(),
+			},
+		}
 	}
 
 	// Subscribe & Publish

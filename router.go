@@ -2,7 +2,6 @@ package turms
 
 import (
 	"golang.org/x/net/context"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -67,20 +66,19 @@ func (r *Router) handleConn(conn net.Conn, codec Codec) {
 			}
 			return
 		}
-		log.Printf("[DEBUG]Message: %#v", msg)
 		r.mu.RLock()
 		tCtx, cancel := context.WithTimeout(r.ctx, r.timeout)
 		ctx := NewRouterContext(tCtx, &RouterContext{counter: &r.idCounter})
 		r.mu.RUnlock()
-		err, ok := ErrorFromContext(ctx)
-		if ok {
-			// TODO Handle errors and don't print them
-			log.Print(err)
-		}
 		// TODO Check r.Handler, if nil use Default
 		// TODO How to handle client closing in a Handler, stopping the chain and continuing the chain
 		// -> Wrap the conn in a wrapper, stop: cancel ctx (stops chain execution), continue: pass ctx
 		endCtx := r.Handler.Handle(ctx, c, msg)
+
+		// err, ok := ErrorFromContext(endCtx)
+		// if ok {
+		// TODO Handle errors and don't print them
+		// }
 		select {
 		case <-tCtx.Done():
 			// message tCtx timed out
