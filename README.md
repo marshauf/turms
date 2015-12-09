@@ -1,4 +1,8 @@
-# Go WAMP implementation
+# turms
+
+[![Build Status](https://travis-ci.org/marshauf/turms.svg)](https://travis-ci.org/marshauf/turms) [![GoDoc](https://godoc.org/github.com/marshauf/turms?status.svg)](https://godoc.org/github.com/marshauf/turms)
+
+The Go implementation of WAMP (Web Application Messaging Protocol) v2.
 
 ## Spec implementation:
 
