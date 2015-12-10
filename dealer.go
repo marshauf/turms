@@ -28,14 +28,14 @@ func Dealer() Handler {
 	}
 }
 
-func (d *dealer) registerEndpoint(procedure URI, sessionID ID, conn Conn) (ID, error) {
+func (d *dealer) registerEndpoint(procedure URI, sessionID ID, idC *idCounter, conn Conn) (ID, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	procedureID, exist := d.procedures[procedure]
 	if exist {
 		return 0, &ProcedureAlreadyExists
 	}
-	procedureID = ID(0)
+	procedureID = idC.Next()
 	d.procedures[procedure] = procedureID
 	d.endpoints[procedureID] = map[ID]Conn{
 		sessionID: conn,
@@ -87,7 +87,11 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 
 	switch m := msg.(type) {
 	case *Register:
-		registrationID, err := d.registerEndpoint(m.Procedure, se.ID(), conn)
+		rCtx, ok := RouterContextFromContext(ctx)
+		if !ok {
+			return NewErrorContext(ctx, fmt.Errorf("Dealer requires a RouterContext stored in the context"))
+		}
+		registrationID, err := d.registerEndpoint(m.Procedure, se.ID(), rCtx.counter, conn)
 		if err != nil {
 			errMsg := &Error{RegisterCode, m.Request, map[string]interface{}{}, URI("wamp.error.procedure_already_exists"), nil, nil}
 			err = conn.Send(ctx, errMsg)
