@@ -142,6 +142,11 @@ func TestRouterBasicProfile(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+
+	err = router.Close()
+	if err == nil {
+		t.Errorf("router.Close should return an error if its already closed")
+	}
 }
 
 func TestRouterMultipleClients(t *testing.T) {
