@@ -20,7 +20,8 @@ type conn struct {
 	mr   *messageReader
 	dec  *codec.Decoder
 	enc  *codec.Encoder
-	mu   sync.RWMutex
+	rmu  sync.Mutex
+	wmu  sync.Mutex
 }
 
 // NewConn wraps a net.Conn
@@ -50,6 +51,8 @@ func (c *conn) Close() error {
 func (c *conn) Send(ctx context.Context, msg Message) error {
 	res := make(chan error, 1)
 	go func() {
+		c.wmu.Lock()
+		defer c.wmu.Unlock()
 		err := c.enc.Encode(msg)
 		res <- err
 	}()
@@ -67,11 +70,10 @@ func (c *conn) Read(ctx context.Context) (Message, error) {
 		err error
 	}
 	res := make(chan msgAndErr, 1)
-	go func() {
 
-		// TODO Try to avoid write lock, messageReader is modifying itself
-		c.mu.Lock()
-		defer c.mu.Unlock()
+	go func() {
+		c.rmu.Lock()
+		defer c.rmu.Unlock()
 
 		var msgTyp [1]MessageType
 		err := c.dec.Decode(&msgTyp)
