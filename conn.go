@@ -68,6 +68,11 @@ func (c *conn) Read(ctx context.Context) (Message, error) {
 	}
 	res := make(chan msgAndErr, 1)
 	go func() {
+
+		// TODO Try to avoid write lock, messageReader is modifying itself
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
 		var msgTyp [1]MessageType
 		err := c.dec.Decode(&msgTyp)
 		if err != nil {
