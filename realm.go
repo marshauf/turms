@@ -116,7 +116,7 @@ func (r *realm) RegisterFeatures(name string, features ...string) error {
 
 func handleProtocolViolation(ctx context.Context, conn Conn) error {
 	defer conn.Close()
-	byeMsg := &Goodbye{map[string]interface{}{}, URI("wamp.error.protocol_violation")}
+	byeMsg := &Goodbye{GoodbyeCode, map[string]interface{}{}, URI("wamp.error.protocol_violation")}
 	return conn.Send(ctx, byeMsg)
 }
 
@@ -124,7 +124,6 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 	r.mu.RLock()
 	se, hasSession := r.clients[conn]
 	r.mu.RUnlock()
-
 	switch m := msg.(type) {
 	case *Hello:
 		if hasSession {
@@ -141,7 +140,7 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 		r.clients[conn] = se
 		r.mu.Unlock()
 
-		welcomeMsg := &Welcome{se.ID(), r.details()}
+		welcomeMsg := &Welcome{WelcomeCode, se.ID(), r.details()}
 		err := conn.Send(ctx, welcomeMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
@@ -155,7 +154,7 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 	case *Goodbye:
 		if m.Reason != GoodbyeAndOut {
 			// Reply with goodbye if received message is not a goodbye message
-			byeMsg := &Goodbye{map[string]interface{}{}, GoodbyeAndOut}
+			byeMsg := &Goodbye{GoodbyeCode, map[string]interface{}{}, GoodbyeAndOut}
 			err := conn.Send(ctx, byeMsg)
 			if err != nil {
 				ctx = NewErrorContext(ctx, err)

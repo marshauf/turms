@@ -101,7 +101,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		}
 
 		topicID := b.subscribe(m.Topic, se.ID(), rCtx.counter, conn)
-		subscribedMsg := &Subscribed{m.Request, topicID}
+		subscribedMsg := &Subscribed{SubscribedCode, m.Request, topicID}
 		err := conn.Send(ctx, subscribedMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
@@ -110,7 +110,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 	case *Unsubscribe:
 		err := b.unsubscribe(m.Subscription, se.ID())
 		if err != nil {
-			errMsg := &Error{
+			errMsg := &Error{ErrorCode,
 				UnsubscribeCode, m.Request, map[string]interface{}{}, "wamp.error.no_such_subscription", nil, nil,
 			}
 			err = conn.Send(ctx, errMsg)
@@ -120,7 +120,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, fmt.Errorf("No such subscription"))
 		}
 
-		msg := &Unsubscribed{m.Request}
+		msg := &Unsubscribed{UnsubscribedCode, m.Request}
 		err = conn.Send(ctx, msg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
@@ -131,15 +131,17 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 
 		publicationID := NewGlobalID()
 		for _, sub := range subscriptions {
-			eventMsg := &Event{
+			eventMsg := &Event{EventCode,
 				sub.id, publicationID, map[string]interface{}{}, m.Args, m.ArgsKW,
 			}
-			sub.subscriber.Send(ctx, eventMsg)
+			if err := sub.subscriber.Send(ctx, eventMsg); err != nil {
+				// TODO depending on error drop subscriber
+			}
 		}
 
 		if acknowledgeVal, ok := m.Options["acknowledge"]; ok {
 			if acknowledge, ok := acknowledgeVal.(bool); ok && acknowledge {
-				acknowledgeMsg := &Published{m.Request, publicationID}
+				acknowledgeMsg := &Published{PublishedCode, m.Request, publicationID}
 				if err := conn.Send(ctx, acknowledgeMsg); err != nil {
 					return NewErrorContext(ctx, err)
 				}

@@ -1,6 +1,7 @@
 package turms
 
 import (
+	"github.com/ugorji/go/codec"
 	"golang.org/x/net/context"
 	"net"
 	"sync"
@@ -15,16 +16,30 @@ type Conn interface {
 }
 
 type conn struct {
-	conn  net.Conn
-	codec Codec
-	mu    sync.RWMutex
+	conn net.Conn
+	mr   *messageReader
+	dec  *codec.Decoder
+	enc  *codec.Encoder
+	mu   sync.RWMutex
 }
 
 // NewConn wraps a net.Conn
-func NewConn(c net.Conn, codec Codec) Conn {
+func NewConn(c net.Conn, h codec.Handle) Conn {
+	mr := newMessageReader(c, 1024)
+	// Force DecodeOptions.ErrorIfNoArrayExpand = false
+	switch handle := h.(type) {
+	case *codec.JsonHandle:
+		handle.DecodeOptions.ErrorIfNoArrayExpand = false
+		handle.EncodeOptions.StructToArray = true
+	case *codec.MsgpackHandle:
+		handle.DecodeOptions.ErrorIfNoArrayExpand = false
+		handle.EncodeOptions.StructToArray = true
+	}
 	return &conn{
-		conn:  c,
-		codec: codec,
+		conn: c,
+		mr:   mr,
+		dec:  codec.NewDecoder(mr, h),
+		enc:  codec.NewEncoder(c, h),
 	}
 }
 
@@ -35,7 +50,7 @@ func (c *conn) Close() error {
 func (c *conn) Send(ctx context.Context, msg Message) error {
 	res := make(chan error, 1)
 	go func() {
-		err := c.codec.Encode(c.conn, msg)
+		err := c.enc.Encode(msg)
 		res <- err
 	}()
 	select {
@@ -53,8 +68,17 @@ func (c *conn) Read(ctx context.Context) (Message, error) {
 	}
 	res := make(chan msgAndErr, 1)
 	go func() {
-		msg, err := c.codec.Decode(c.conn)
+		var msgTyp [1]MessageType
+		err := c.dec.Decode(&msgTyp)
+		if err != nil {
+			res <- msgAndErr{msg: nil, err: err}
+			return
+		}
+		c.mr.ResetRead()
+		msg := NewMessage(msgTyp[0])
+		err = c.dec.Decode(msg)
 		res <- msgAndErr{msg: msg, err: err}
+		c.mr.Reset()
 	}()
 
 	select {

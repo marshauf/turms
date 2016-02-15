@@ -1,10 +1,13 @@
 package turms
 
 import (
+	"github.com/ugorji/go/codec"
 	"golang.org/x/net/context"
-	"log"
+	"golang.org/x/net/websocket"
+	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -25,16 +28,21 @@ func (h *logHandler) Handle(ctx context.Context, c Conn, msg Message) context.Co
 	return ctx
 }
 
-func TestRouterBasicProfile(t *testing.T) {
-	router := NewRouter()
+var (
+	router  *Router
+	server  *httptest.Server
+	verbose = true
+	once    sync.Once
 
-	verbose := true
+	log = &logHandler{}
+)
+
+func startRouter() {
+	router = NewRouter()
 	if verbose {
 		router.Handler = &Chain{
 			Realm(realmName),
-			&logHandler{
-				log.Printf,
-			},
+			log,
 			&Chain{
 				Broker(),
 				Dealer(),
@@ -49,41 +57,67 @@ func TestRouterBasicProfile(t *testing.T) {
 			},
 		}
 	}
+	ws := websocket.Handler(func(ws *websocket.Conn) {
+		router.AcceptConn(ws, &codec.JsonHandle{})
+	})
+	server = httptest.NewServer(ws)
+}
 
+const timeout = time.Second
+
+func newTimeoutContext() context.Context {
+	ctx, _ := context.WithTimeout(context.Background(), timeout)
+	return ctx
+}
+
+func TestRouterBasicProfile(t *testing.T) {
+	log.logf = t.Logf
+	once.Do(startRouter)
+
+	addr := "ws" + server.URL[len("http"):]
 	// Subscribe & Publish
-	publisher := router.Client()
-	err := publisher.JoinRealm(context.Background(), realmName, &ClientDetails{Publisher: true})
+	publisher, err := Dial(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = publisher.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Publisher: true})
+	if err != nil {
+		t.Error(err)
+	}
+	subscriber, err := Dial(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = subscriber.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Subscriber: true})
 	if err != nil {
 		t.Error(err)
 	}
 
-	subscriber := router.Client()
-	err = subscriber.JoinRealm(context.Background(), realmName, &ClientDetails{Subscriber: true})
-	if err != nil {
-		t.Error(err)
-	}
-
-	sub, err := subscriber.Subscribe(context.Background(), "test")
+	sub, err := subscriber.Subscribe(newTimeoutContext(), "test")
 	if err != nil {
 		t.Error(err)
 	}
 
 	eventText := "Hello"
-	err = publisher.Publish(context.Background(), &PublishOption{true}, "test", []interface{}{eventText}, nil)
+	err = publisher.Publish(newTimeoutContext(), &PublishOption{true}, "test", []interface{}{eventText}, nil)
 	if err != nil {
 		t.Error(err)
 	}
 
-	event := <-sub
-	if len(event.Args) == 0 {
-		t.Errorf("Received event %v should contain one argument", event)
-	} else {
-		text, ok := event.Args[0].(string)
-		if !ok {
-			t.Errorf("Expected argument 0 to be of type string, got %T", event.Args[0])
-		}
-		if text != eventText {
-			t.Errorf("Expected argument 0 to be %s, got %s", eventText, text)
+	select {
+	case <-time.After(timeout):
+		t.Errorf("Did not receive an event in %s.", timeout)
+	case event := <-sub:
+		if len(event.Args) == 0 {
+			t.Errorf("Received event %v should contain one argument", event)
+		} else {
+			text, ok := event.Args[0].(string)
+			if !ok {
+				t.Errorf("Expected argument 0 to be of type string, got %T", event.Args[0])
+			}
+			if text != eventText {
+				t.Errorf("Expected argument 0 to be %s, got %s", eventText, text)
+			}
 		}
 	}
 
@@ -91,21 +125,26 @@ func TestRouterBasicProfile(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-
 	err = subscriber.Close()
 	if err != nil {
 		t.Error(err)
 	}
 
 	// Register & Call
-	callee := router.Client()
-	err = callee.JoinRealm(context.Background(), realmName, &ClientDetails{Callee: true})
+	callee, err := Dial(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = callee.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Callee: true})
 	if err != nil {
 		t.Error(err)
 	}
 
-	caller := router.Client()
-	err = caller.JoinRealm(context.Background(), realmName, &ClientDetails{Caller: true})
+	caller, err := Dial(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = caller.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Caller: true})
 	if err != nil {
 		t.Error(err)
 	}
@@ -115,14 +154,20 @@ func TestRouterBasicProfile(t *testing.T) {
 	helloCaller := "Hello Caller"
 	procedureArgs := []interface{}{helloCallee}
 	procedureArgsKW := map[string]interface{}{"test": "value"}
-	err = callee.Register(context.Background(), procedureName, func(ctx context.Context, inv *Invocation) ([]interface{}, map[string]interface{}, error) {
+	err = callee.Register(newTimeoutContext(), procedureName, func(ctx context.Context, inv *Invocation) ([]interface{}, map[string]interface{}, error) {
 		arg := inv.Args[0].(string)
 		if arg != helloCallee {
 			t.Errorf("Expected args[0] to be %s got %s", helloCallee, arg)
 		}
-		kw := inv.ArgsKW["test"].(string)
-		if kw != "value" {
-			t.Errorf("Expected argsKW[\"test\"] to be %s got %s", "value", arg)
+		kw, ok := inv.ArgsKW["test"]
+		if !ok {
+			t.Errorf("Expected a value at argsKW[\"test\"]")
+		}
+		testVal, ok := kw.(string)
+		if !ok {
+			t.Errorf("Expected argsKW[\"test\"] to be of type string got %T ", testVal)
+		} else if testVal != "value" {
+			t.Errorf("Expected argsKW[\"test\"] to be %s got %s", procedureArgsKW["test"], testVal)
 		}
 		return []interface{}{helloCaller}, nil, nil
 	})
@@ -130,7 +175,7 @@ func TestRouterBasicProfile(t *testing.T) {
 		t.Error(err)
 	}
 
-	res, err := caller.Call(context.Background(), procedureName, procedureArgs, procedureArgsKW)
+	res, err := caller.Call(newTimeoutContext(), procedureName, procedureArgs, procedureArgsKW)
 	if err != nil {
 		t.Error(err)
 	}
@@ -138,44 +183,31 @@ func TestRouterBasicProfile(t *testing.T) {
 		t.Errorf("Expected res.Args[0] to be %s got %s", helloCaller, res.Args[0].(string))
 	}
 
-	err = router.Close()
+	err = callee.Close()
 	if err != nil {
 		t.Error(err)
 	}
 
-	err = router.Close()
-	if err == nil {
-		t.Errorf("router.Close should return an error if its already closed")
+	err = caller.Close()
+	if err != nil {
+		t.Error(err)
 	}
 }
 
 func TestRouterMultipleClients(t *testing.T) {
-	router := NewRouter()
-	defer func() {
-		err := router.Close()
-		if err != nil {
-			t.Error(err)
-		}
-	}()
-	router.Handler = &Chain{
-		Realm(realmName),
-		&Chain{
-			Broker(),
-			Dealer(),
-		},
-	}
+	log.logf = t.Logf
+	once.Do(startRouter)
 
 	numClients := 10
 	clients := make([]*Client, numClients)
 	for i := range clients {
 		clients[i] = router.Client()
 	}
-
 	var wg sync.WaitGroup
 	for _, client := range clients {
 		wg.Add(1)
 		go func(c *Client) {
-			err := c.JoinRealm(context.Background(), realmName, &ClientDetails{true, true, true, true})
+			err := c.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{true, true, true, true})
 			if err != nil {
 				t.Error(err)
 			}

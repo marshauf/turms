@@ -93,14 +93,14 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		}
 		registrationID, err := d.registerEndpoint(m.Procedure, se.ID(), rCtx.counter, conn)
 		if err != nil {
-			errMsg := &Error{RegisterCode, m.Request, map[string]interface{}{}, URI("wamp.error.procedure_already_exists"), nil, nil}
+			errMsg := &Error{ErrorCode, RegisterCode, m.Request, map[string]interface{}{}, URI("wamp.error.procedure_already_exists"), nil, nil}
 			err = conn.Send(ctx, errMsg)
 			if err != nil {
 				return NewErrorContext(ctx, err)
 			}
 			return NewErrorContext(ctx, err)
 		}
-		registeredMsg := &Registered{m.Request, registrationID}
+		registeredMsg := &Registered{RegisteredCode, m.Request, registrationID}
 		err = conn.Send(ctx, registeredMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
@@ -108,7 +108,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 	case *Unregister:
 		err := d.unregisterEndpoint(m.Registration, se.ID(), conn)
 		if err != nil {
-			errMsg := &Error{UnregisterCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
+			errMsg := &Error{ErrorCode, UnregisterCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
 			if err == &NotAuthorized {
 				errMsg.Error = NotAuthorized
 			}
@@ -118,7 +118,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			}
 			return NewErrorContext(ctx, err)
 		}
-		unregisteredMsg := &Unregistered{m.Request}
+		unregisteredMsg := &Unregistered{UnregisteredCode, m.Request}
 		err = conn.Send(ctx, unregisteredMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
@@ -126,7 +126,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 	case *Call:
 		endpoint, procedureID, err := d.getEndpoint(m.Procedure)
 		if err != nil {
-			errMsg := &Error{CallCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
+			errMsg := &Error{ErrorCode, CallCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
 			err = conn.Send(ctx, errMsg)
 			if err != nil {
 				return NewErrorContext(ctx, err)
@@ -136,10 +136,12 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		invocationReqID := se.NextID()
 		d.invocations[invocationReqID] = conn
 		d.calls[invocationReqID] = m.Request
-		invocationMsg := &Invocation{invocationReqID, procedureID, map[string]interface{}{}, m.Args, m.ArgsKW}
+		invocationMsg := &Invocation{InvocationCode, invocationReqID, procedureID, map[string]interface{}{}, m.Args, m.ArgsKW}
 		err = endpoint.Send(ctx, invocationMsg)
 		if err != nil {
 			// TODO handle err
+			// TODO drop endpoint depending on the error
+			// TODO Send error message to caller
 			delete(d.invocations, invocationReqID)
 			delete(d.calls, invocationReqID)
 			return NewErrorContext(ctx, err)
@@ -155,7 +157,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, fmt.Errorf("No call ID found"))
 		}
 		details := map[string]interface{}{}
-		resMsg := &Result{callReqID, details, m.Args, m.ArgsKW}
+		resMsg := &Result{ResultCode, callReqID, details, m.Args, m.ArgsKW}
 		err := caller.Send(ctx, resMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
@@ -173,7 +175,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		if !hasCallID {
 			return NewErrorContext(ctx, fmt.Errorf("No call ID found"))
 		}
-		respMsg := &Error{CallCode, callReqID, m.Details, m.Error, m.Args, m.ArgsKW}
+		respMsg := &Error{ErrorCode, CallCode, callReqID, m.Details, m.Error, m.Args, m.ArgsKW}
 		err := caller.Send(ctx, respMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)

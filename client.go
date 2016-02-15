@@ -2,6 +2,7 @@ package turms
 
 import (
 	"fmt"
+	"github.com/ugorji/go/codec"
 	"golang.org/x/net/context"
 	"golang.org/x/net/websocket"
 	"strings"
@@ -34,7 +35,7 @@ func Dial(url string) (*Client, error) {
 		URL:      url,
 		LocalURL: "http://localhost/",
 		Protocol: "wamp.2.json",
-		Codec:    &JSONCodec{},
+		Codec:    &codec.JsonHandle{},
 		Timeout:  time.Second * 60,
 	}
 	return DialWithInfo(info)
@@ -44,7 +45,7 @@ type DialInfo struct {
 	URL      string
 	LocalURL string
 	Protocol string
-	Codec    Codec
+	Codec    codec.Handle
 	Timeout  time.Duration
 }
 
@@ -123,7 +124,7 @@ type Options interface {
 func (c *Client) JoinRealm(ctx context.Context, realm URI, details Details) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	msg := &Hello{realm, details.Details()}
+	msg := &Hello{HelloCode, realm, details.Details()}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	err := c.conn.Send(ctx, msg)
@@ -143,7 +144,7 @@ func (c *Client) JoinRealm(ctx context.Context, realm URI, details Details) erro
 		c.serverDetails = m.Details
 		c.sessionID = m.Session
 	default:
-		return fmt.Errorf("Unexpected message %s", m.Code())
+		return fmt.Errorf("Unexpected message %s", m.Type())
 	}
 
 	go c.handle()
@@ -256,7 +257,7 @@ func (c *Client) Subscribe(ctx context.Context, topic URI) (<-chan *Event, error
 
 	c.req.set(reqID)
 
-	req := &Subscribe{reqID, map[string]interface{}{}, URI(topic)}
+	req := &Subscribe{SubscribeCode, reqID, map[string]interface{}{}, URI(topic)}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	if err := c.Send(ctx, req); err != nil {
@@ -274,7 +275,7 @@ func (c *Client) Subscribe(ctx context.Context, topic URI) (<-chan *Event, error
 	case *Error:
 		return nil, fmt.Errorf("%s", m.Error)
 	}
-	return nil, fmt.Errorf("Unknown message code response %d", resp.Code())
+	return nil, fmt.Errorf("Unknown message code response %d", resp.Type())
 }
 
 func (c *Client) Unsubscribe(ctx context.Context, topic URI) error {
@@ -283,7 +284,7 @@ func (c *Client) Unsubscribe(ctx context.Context, topic URI) error {
 		return fmt.Errorf("No subscription to %s exists", topic)
 	}
 	reqID := c.counter.Next()
-	msg := &Unsubscribe{reqID, subID}
+	msg := &Unsubscribe{UnsubscribeCode, reqID, subID}
 
 	c.req.set(reqID)
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -302,12 +303,12 @@ func (c *Client) Unsubscribe(ctx context.Context, topic URI) error {
 	case *Error:
 		return fmt.Errorf("%s", m.Error)
 	}
-	return fmt.Errorf("Unknown message code response %d", resp.Code())
+	return fmt.Errorf("Unknown message code response %d", resp.Type())
 }
 
 func (c *Client) Publish(ctx context.Context, options Options, topic URI, args []interface{}, argsKW map[string]interface{}) error {
 	reqID := c.counter.Next()
-	msg := &Publish{reqID, options.Options(), topic, args, argsKW}
+	msg := &Publish{PublishCode, reqID, options.Options(), topic, args, argsKW}
 
 	if options == nil {
 		return c.Send(ctx, msg)
@@ -337,7 +338,7 @@ func (c *Client) Publish(ctx context.Context, options Options, topic URI, args [
 	case *Error:
 		return fmt.Errorf("%s", m.Error)
 	}
-	return fmt.Errorf("Unknown message code response %d", resp.Code())
+	return fmt.Errorf("Unknown message code response %d", resp.Type())
 }
 
 type InvocationHandler func(context.Context, *Invocation) ([]interface{}, map[string]interface{}, error)
@@ -391,7 +392,7 @@ func (c *callee) handler(id ID) (InvocationHandler, bool) {
 func (c *Client) Register(ctx context.Context, name URI, h InvocationHandler) error {
 	reqID := c.counter.Next()
 	options := map[string]interface{}{}
-	msg := &Register{reqID, options, name}
+	msg := &Register{RegisterCode, reqID, options, name}
 
 	c.req.set(reqID)
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -411,7 +412,7 @@ func (c *Client) Register(ctx context.Context, name URI, h InvocationHandler) er
 	case *Error:
 		return fmt.Errorf("%s", m.Error)
 	}
-	return fmt.Errorf("Unknown message code response %d", resp.Code())
+	return fmt.Errorf("Unknown message code response %d", resp.Type())
 }
 
 func (c *Client) Unregister(ctx context.Context, name URI) error {
@@ -420,7 +421,7 @@ func (c *Client) Unregister(ctx context.Context, name URI) error {
 		return fmt.Errorf("No procedure %s registered", name)
 	}
 	reqID := c.counter.Next()
-	msg := &Unregister{reqID, procedureID}
+	msg := &Unregister{UnregisterCode, reqID, procedureID}
 
 	c.req.set(reqID)
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -439,14 +440,14 @@ func (c *Client) Unregister(ctx context.Context, name URI) error {
 	case *Error:
 		return fmt.Errorf("%s", m.Error)
 	}
-	return fmt.Errorf("Unknown message code response %d", resp.Code())
+	return fmt.Errorf("Unknown message code response %d", resp.Type())
 }
 
 func (c *Client) Call(ctx context.Context, procedure URI, args []interface{}, argsKW map[string]interface{}) (*Result, error) {
 	reqID := c.counter.Next()
 
 	options := map[string]interface{}{}
-	msg := &Call{reqID, options, procedure, args, argsKW}
+	msg := &Call{CallCode, reqID, options, procedure, args, argsKW}
 
 	c.req.set(reqID)
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -465,7 +466,7 @@ func (c *Client) Call(ctx context.Context, procedure URI, args []interface{}, ar
 	case *Error:
 		return nil, fmt.Errorf("%s", m.Error)
 	}
-	return nil, fmt.Errorf("Unknown message code response %d", resp.Code())
+	return nil, fmt.Errorf("Unknown message code response %d", resp.Type())
 }
 
 func (c *Client) Send(ctx context.Context, message Message) error {
@@ -499,7 +500,9 @@ func (c *Client) handle() {
 					cancel()
 				}
 				// TODO check if request to close the session came from the client or router
-				c.gdbyWait.Unlock()
+				if m.Reason == GoodbyeAndOut {
+					c.gdbyWait.Unlock()
+				}
 				return
 			case *Abort:
 				// TODO Protocol violation
@@ -514,7 +517,7 @@ func (c *Client) handle() {
 				reg, exist := c.cal.handler(m.Registration)
 				if !exist {
 					details := map[string]interface{}{}
-					resp := &Error{InvocationCode, m.Request, details, NoSuchProcedure, nil, nil}
+					resp := &Error{ErrorCode, InvocationCode, m.Request, details, NoSuchProcedure, nil, nil}
 					err := c.Send(c.ctx, resp)
 					switch err {
 					case context.Canceled, context.DeadlineExceeded:
@@ -530,7 +533,7 @@ func (c *Client) handle() {
 				args, argsKW, err := reg(c.ctx, m)
 				if err != nil {
 					details := map[string]interface{}{}
-					resp := &Error{InvocationCode, m.Request, details, URI(err.Error()), args, argsKW}
+					resp := &Error{ErrorCode, InvocationCode, m.Request, details, URI(err.Error()), args, argsKW}
 					err := c.Send(c.ctx, resp)
 					switch err {
 					case context.Canceled, context.DeadlineExceeded:
@@ -544,7 +547,7 @@ func (c *Client) handle() {
 					}
 				}
 				details := map[string]interface{}{}
-				resp := &Yield{m.Request, details, args, argsKW}
+				resp := &Yield{YieldCode, m.Request, details, args, argsKW}
 				err = c.Send(c.ctx, resp)
 				switch err {
 				case context.Canceled, context.DeadlineExceeded:
@@ -570,7 +573,7 @@ func (c *Client) handle() {
 func (c *Client) Close() error {
 	c.gdbyWait.Lock()
 
-	gdbye := &Goodbye{map[string]interface{}{}, CloseRealm}
+	gdbye := &Goodbye{GoodbyeCode, map[string]interface{}{}, CloseRealm}
 	ctx, cancel := context.WithTimeout(c.ctx, c.timeout)
 	c.conn.Send(ctx, gdbye)
 	cancel()
