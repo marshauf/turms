@@ -6,6 +6,7 @@ import (
 )
 
 var errNegativeRead = errors.New("bufio: reader returned negative count from Read")
+var ErrBufferFull = errors.New("bufio: full buffer")
 
 const minReadBufferSize = 16
 const maxConsecutiveEmptyReads = 100
@@ -35,15 +36,11 @@ func newMessageReader(rd io.Reader, size int) *messageReader {
 func (b *messageReader) Read(p []byte) (n int, err error) {
 	n = len(p)
 	if n == 0 {
-		return 0, b.readErr()
+		return 0, nil
 	}
 	if b.r == b.w {
-		if b.err != nil {
-			return 0, b.readErr()
-		}
-		b.fill() // buffer is empty
-		if b.r == b.w {
-			return 0, b.readErr()
+		if err := b.fill(); err != nil {
+			return 0, err
 		}
 	}
 
@@ -53,19 +50,21 @@ func (b *messageReader) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
+// Reset discards any buffered data, and resets all state.
 func (b *messageReader) Reset() {
 	b.r = 0
 	b.w = 0
 }
 
+// ResetRead sets the read position to the beginning of the buffer.
 func (b *messageReader) ResetRead() {
 	b.r = 0
 }
 
 // fill reads a new chunk into the buffer.
-func (b *messageReader) fill() {
+func (b *messageReader) fill() error {
 	if b.w >= len(b.buf) {
-		panic("bufio: tried to fill full buffer")
+		return ErrBufferFull
 	}
 
 	// Read new data: try a limited number of times.
@@ -76,18 +75,11 @@ func (b *messageReader) fill() {
 		}
 		b.w += n
 		if err != nil {
-			b.err = err
-			return
+			return err
 		}
 		if n > 0 {
-			return
+			return nil
 		}
 	}
-	b.err = io.ErrNoProgress
-}
-
-func (b *messageReader) readErr() error {
-	err := b.err
-	b.err = nil
-	return err
+	return io.ErrNoProgress
 }
