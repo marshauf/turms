@@ -4,6 +4,7 @@ import (
 	"github.com/ugorji/go/codec"
 	"golang.org/x/net/context"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -15,10 +16,12 @@ type Conn interface {
 }
 
 type conn struct {
-	conn net.Conn
-	mr   *messageReader
-	dec  *codec.Decoder
-	enc  *codec.Encoder
+	conn  net.Conn
+	mr    *messageReader
+	dec   *codec.Decoder
+	decmu sync.Mutex
+	enc   *codec.Encoder
+	encmu sync.Mutex
 }
 
 // NewConn wraps a net.Conn
@@ -48,8 +51,11 @@ func (c *conn) Close() error {
 
 func (c *conn) Send(ctx context.Context, msg Message) error {
 	res := make(chan error, 1)
+	c.encmu.Lock()
+	defer c.encmu.Unlock()
 	go func() {
 		err := c.enc.Encode(msg)
+		c.enc.Reset(c.conn)
 		res <- err
 	}()
 	select {
@@ -66,6 +72,8 @@ func (c *conn) Read(ctx context.Context) (Message, error) {
 		err error
 	}
 	res := make(chan msgAndErr, 1)
+	c.decmu.Lock()
+	defer c.decmu.Unlock()
 
 	go func() {
 		var msgTyp [1]MessageType
@@ -78,6 +86,7 @@ func (c *conn) Read(ctx context.Context) (Message, error) {
 		msg := NewMessage(msgTyp[0])
 		err = c.dec.Decode(msg)
 		c.mr.Reset()
+		c.dec.Reset(c.mr)
 		res <- msgAndErr{msg: msg, err: err}
 	}()
 
