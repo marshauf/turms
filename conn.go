@@ -4,7 +4,6 @@ import (
 	"github.com/ugorji/go/codec"
 	"golang.org/x/net/context"
 	"net"
-	"sync"
 	"time"
 )
 
@@ -20,14 +19,13 @@ type conn struct {
 	mr   *messageReader
 	dec  *codec.Decoder
 	enc  *codec.Encoder
-	rmu  sync.Mutex
-	wmu  sync.Mutex
 }
 
 // NewConn wraps a net.Conn
 func NewConn(c net.Conn, h codec.Handle) Conn {
 	mr := newMessageReader(c, 1024)
 	// Force DecodeOptions.ErrorIfNoArrayExpand = false
+	// and DecodeOptions.StructToArray = true
 	switch handle := h.(type) {
 	case *codec.JsonHandle:
 		handle.DecodeOptions.ErrorIfNoArrayExpand = false
@@ -51,8 +49,6 @@ func (c *conn) Close() error {
 func (c *conn) Send(ctx context.Context, msg Message) error {
 	res := make(chan error, 1)
 	go func() {
-		c.wmu.Lock()
-		defer c.wmu.Unlock()
 		err := c.enc.Encode(msg)
 		res <- err
 	}()
@@ -72,20 +68,17 @@ func (c *conn) Read(ctx context.Context) (Message, error) {
 	res := make(chan msgAndErr, 1)
 
 	go func() {
-		c.rmu.Lock()
-		defer c.rmu.Unlock()
-
 		var msgTyp [1]MessageType
 		err := c.dec.Decode(&msgTyp)
+		c.mr.ResetRead()
 		if err != nil {
 			res <- msgAndErr{msg: nil, err: err}
 			return
 		}
-		c.mr.ResetRead()
 		msg := NewMessage(msgTyp[0])
 		err = c.dec.Decode(msg)
-		res <- msgAndErr{msg: msg, err: err}
 		c.mr.Reset()
+		res <- msgAndErr{msg: msg, err: err}
 	}()
 
 	select {
