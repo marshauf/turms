@@ -100,7 +100,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, fmt.Errorf("Broker requires a RouterContext stored in the context"))
 		}
 
-		topicID := b.subscribe(m.Topic, se.ID(), rCtx.counter, conn)
+		topicID := b.subscribe(m.Topic, se.ID, rCtx.counter, conn)
 		subscribedMsg := &Subscribed{SubscribedCode, m.Request, topicID}
 		err := conn.Send(ctx, subscribedMsg)
 		if err != nil {
@@ -108,7 +108,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		}
 		return ctx
 	case *Unsubscribe:
-		err := b.unsubscribe(m.Subscription, se.ID())
+		err := b.unsubscribe(m.Subscription, se.ID)
 		if err != nil {
 			errMsg := &Error{ErrorCode,
 				UnsubscribeCode, m.Request, map[string]interface{}{}, "wamp.error.no_such_subscription", nil, nil,

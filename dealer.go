@@ -91,7 +91,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		if !ok {
 			return NewErrorContext(ctx, fmt.Errorf("Dealer requires a RouterContext stored in the context"))
 		}
-		registrationID, err := d.registerEndpoint(m.Procedure, se.ID(), rCtx.counter, conn)
+		registrationID, err := d.registerEndpoint(m.Procedure, se.ID, rCtx.counter, conn)
 		if err != nil {
 			errMsg := &Error{ErrorCode, RegisterCode, m.Request, map[string]interface{}{}, URI("wamp.error.procedure_already_exists"), nil, nil}
 			err = conn.Send(ctx, errMsg)
@@ -106,7 +106,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, err)
 		}
 	case *Unregister:
-		err := d.unregisterEndpoint(m.Registration, se.ID(), conn)
+		err := d.unregisterEndpoint(m.Registration, se.ID, conn)
 		if err != nil {
 			errMsg := &Error{ErrorCode, UnregisterCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
 			if err == &NotAuthorized {

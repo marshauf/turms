@@ -51,6 +51,9 @@ func (r *Router) handleConn(conn net.Conn, h codec.Handle) {
 	r.mu.Lock()
 	r.conns = append(r.conns, c)
 	r.mu.Unlock()
+
+	se := &Session{}
+
 	for {
 		r.mu.RLock()
 		t := r.timeout
@@ -71,6 +74,8 @@ func (r *Router) handleConn(conn net.Conn, h codec.Handle) {
 		tCtx, cancel := context.WithTimeout(r.ctx, r.timeout)
 		ctx := NewRouterContext(tCtx, &RouterContext{counter: &r.idCounter})
 		r.mu.RUnlock()
+
+		ctx = NewSessionContext(ctx, se)
 		// TODO Check r.Handler, if nil use Default
 		// TODO How to handle client closing in a Handler, stopping the chain and continuing the chain
 		// -> Wrap the conn in a wrapper, stop: cancel ctx (stops chain execution), continue: pass ctx

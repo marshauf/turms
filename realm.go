@@ -11,42 +11,31 @@ const (
 	errorContextKey   = "error"
 )
 
-// A Session manages retrieval of session related values in a message context.
-// Implementations of Session must be safe for concurrent use by multiple goroutines.
-type Session interface {
-	ID() ID
-	Details() map[string]interface{}
+// Session stores the values and optional configuration for a session.
+type Session struct {
+	// ID is the session ID.
+	ID ID
+	// Details stores additional connection opening information.
+	Details map[string]interface{}
 
-	// NextID returns a new session scope ID.
-	NextID() ID
-}
+	Realm URI
 
-type session struct {
-	id      ID
-	details map[string]interface{}
 	counter idCounter
 }
 
-func (s *session) ID() ID {
-	return s.id
-}
-
-func (s *session) NextID() ID {
+// NextID returns a new session scope ID.
+func (s *Session) NextID() ID {
 	return s.counter.Next()
 }
 
-func (s *session) Details() map[string]interface{} {
-	return s.details
-}
-
 // NewSessionContext returns a child context with the session value stored in it.
-func NewSessionContext(ctx context.Context, session Session) context.Context {
+func NewSessionContext(ctx context.Context, session *Session) context.Context {
 	return context.WithValue(ctx, sessionContextKey, session)
 }
 
 // SessionFromContext extracts the session value from the context.
-func SessionFromContext(ctx context.Context) (Session, bool) {
-	s, ok := ctx.Value(sessionContextKey).(Session)
+func SessionFromContext(ctx context.Context) (*Session, bool) {
+	s, ok := ctx.Value(sessionContextKey).(*Session)
 	return s, ok
 }
 
@@ -62,10 +51,7 @@ func ErrorFromContext(ctx context.Context) (error, bool) {
 }
 
 type realm struct {
-	name string
-
-	clients map[Conn]*session
-
+	name  URI
 	mu    sync.RWMutex
 	roles map[string]*role
 }
@@ -76,9 +62,12 @@ type role struct {
 
 // Realm returns a handler that handles realm specific messages.
 func Realm(name string) Handler {
+	realmName := URI(name)
+	if !realmName.Valid() {
+		panic("invalid realm name")
+	}
 	return &realm{
-		name:    name,
-		clients: make(map[Conn]*session),
+		name: realmName,
 	}
 }
 
@@ -121,26 +110,28 @@ func handleProtocolViolation(ctx context.Context, conn Conn) error {
 }
 
 func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
-	r.mu.RLock()
-	se, hasSession := r.clients[conn]
-	r.mu.RUnlock()
+
+	se, hasSession := SessionFromContext(ctx)
+	if !hasSession {
+		panic("router did not provide a session variable in the context")
+	}
+
 	switch m := msg.(type) {
 	case *Hello:
-		if hasSession {
+		// Check if the session is already established with a realm
+		if len(se.Realm) != 0 {
 			handleProtocolViolation(ctx, conn)
 			ctx, cancel := context.WithCancel(ctx)
 			cancel()
 			return NewErrorContext(ctx, fmt.Errorf("Protocol violation"))
 		}
 
-		se = &session{}
-		se.id = NewGlobalID()
+		// assign session to this  realm
+		se.ID = NewGlobalID()
+		se.Realm = r.name
+		se.Details = m.Details
 
-		r.mu.Lock()
-		r.clients[conn] = se
-		r.mu.Unlock()
-
-		welcomeMsg := &Welcome{WelcomeCode, se.ID(), r.details()}
+		welcomeMsg := &Welcome{WelcomeCode, se.ID, r.details()}
 		err := conn.Send(ctx, welcomeMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
