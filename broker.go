@@ -95,12 +95,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 
 	switch m := msg.(type) {
 	case *Subscribe:
-		rCtx, ok := RouterContextFromContext(ctx)
-		if !ok {
-			return NewErrorContext(ctx, fmt.Errorf("Broker requires a RouterContext stored in the context"))
-		}
-
-		topicID := b.subscribe(m.Topic, se.ID, rCtx.counter, conn)
+		topicID := b.subscribe(m.Topic, se.ID, se.routerIDGen, conn)
 		subscribedMsg := &Subscribed{SubscribedCode, m.Request, topicID}
 		err := conn.Send(ctx, subscribedMsg)
 		if err != nil {

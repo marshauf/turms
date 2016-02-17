@@ -50,15 +50,17 @@ func (r *Router) handleConn(conn net.Conn, h codec.Handle) {
 	c := NewConn(conn, h)
 	r.mu.Lock()
 	r.conns = append(r.conns, c)
+	se := &Session{
+		routerIDGen: &r.idCounter,
+	}
 	r.mu.Unlock()
-
-	se := &Session{}
 
 	for {
 		r.mu.RLock()
 		t := r.timeout
+		ctx := r.ctx
 		r.mu.RUnlock()
-		msg, err := waitForMessage(r.ctx, c, t)
+		msg, err := waitForMessage(ctx, c, t)
 		if err != nil {
 			switch err {
 			case context.Canceled:
@@ -70,11 +72,8 @@ func (r *Router) handleConn(conn net.Conn, h codec.Handle) {
 			}
 			return
 		}
-		r.mu.RLock()
-		tCtx, cancel := context.WithTimeout(r.ctx, r.timeout)
-		ctx := NewRouterContext(tCtx, &RouterContext{counter: &r.idCounter})
-		r.mu.RUnlock()
 
+		ctx, cancel := context.WithTimeout(ctx, t)
 		ctx = NewSessionContext(ctx, se)
 		// TODO Check r.Handler, if nil use Default
 		// TODO How to handle client closing in a Handler, stopping the chain and continuing the chain
@@ -86,7 +85,7 @@ func (r *Router) handleConn(conn net.Conn, h codec.Handle) {
 		// TODO Handle errors and don't print them
 		// }
 		select {
-		case <-tCtx.Done():
+		case <-ctx.Done():
 			// message tCtx timed out
 		case <-endCtx.Done():
 			// last handler done
@@ -113,25 +112,6 @@ func (r *Router) Close() error {
 		r.cancel()
 		return nil
 	}
-}
-
-type RouterContext struct {
-	counter *idCounter
-}
-
-func (ctx *RouterContext) NextID() ID {
-	return ctx.counter.Next()
-}
-
-// NewRouterContext returns a child context with the router value stored in it.
-func NewRouterContext(ctx context.Context, r *RouterContext) context.Context {
-	return context.WithValue(ctx, errorContextKey, r)
-}
-
-// RouterContextFromContext extracts the router value from the context.
-func RouterContextFromContext(ctx context.Context) (*RouterContext, bool) {
-	s, ok := ctx.Value(errorContextKey).(*RouterContext)
-	return s, ok
 }
 
 // NewRouter creates a new router ready to accept new connections.

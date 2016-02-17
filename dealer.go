@@ -87,11 +87,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 
 	switch m := msg.(type) {
 	case *Register:
-		rCtx, ok := RouterContextFromContext(ctx)
-		if !ok {
-			return NewErrorContext(ctx, fmt.Errorf("Dealer requires a RouterContext stored in the context"))
-		}
-		registrationID, err := d.registerEndpoint(m.Procedure, se.ID, rCtx.counter, conn)
+		registrationID, err := d.registerEndpoint(m.Procedure, se.ID, se.routerIDGen, conn)
 		if err != nil {
 			errMsg := &Error{ErrorCode, RegisterCode, m.Request, map[string]interface{}{}, URI("wamp.error.procedure_already_exists"), nil, nil}
 			err = conn.Send(ctx, errMsg)
@@ -133,7 +129,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			}
 			return NewErrorContext(ctx, err)
 		}
-		invocationReqID := se.NextID()
+		invocationReqID := se.SessionID()
 		d.invocations[invocationReqID] = conn
 		d.calls[invocationReqID] = m.Request
 		invocationMsg := &Invocation{InvocationCode, invocationReqID, procedureID, map[string]interface{}{}, m.Args, m.ArgsKW}

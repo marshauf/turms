@@ -20,12 +20,20 @@ type Session struct {
 
 	Realm URI
 
+	// The ID generator at the session scope
 	counter idCounter
+	// The ID generator at the router scope
+	routerIDGen *idCounter
 }
 
-// NextID returns a new session scope ID.
-func (s *Session) NextID() ID {
+// SessionID returns a new ID in the session scope.
+func (s *Session) SessionID() ID {
 	return s.counter.Next()
+}
+
+// RouterID returns a new ID in the router scope.
+func (s *Session) RouterID() ID {
+	return s.routerIDGen.Next()
 }
 
 // NewSessionContext returns a child context with the session value stored in it.
