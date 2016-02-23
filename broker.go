@@ -126,6 +126,10 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 
 		publicationID := NewGlobalID()
 		for _, sub := range subscriptions {
+			// Don't send a published event to the pubisher itself
+			if se.ID == sub.sessionID {
+				continue
+			}
 			eventMsg := &Event{EventCode,
 				sub.id, publicationID, map[string]interface{}{}, m.Args, m.ArgsKW,
 			}
