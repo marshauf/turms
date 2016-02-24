@@ -497,9 +497,8 @@ func (c *Client) handle() {
 				// TODO Protocol violation
 			case *Goodbye:
 				if m.Reason != GoodbyeAndOut {
-					ctx, cancel := context.WithTimeout(c.ctx, c.timeout)
+					ctx, _ := context.WithTimeout(c.ctx, c.timeout)
 					c.conn.Send(ctx, msg) // omitting err value because closing session anyway
-					cancel()
 				}
 				// TODO check if request to close the session came from the client or router
 				if m.Reason == GoodbyeAndOut {
