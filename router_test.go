@@ -21,7 +21,7 @@ func (h *logHandler) Handle(ctx context.Context, c Conn, msg Message) context.Co
 		h.logf("[DEBUG][UnknownSession]: %#v", msg)
 		return ctx
 	}
-	h.logf("[DEBUG][%d]: %#v", se.ID, msg)
+	h.logf("[DEBUG][Realm:%s][Session:%d]: %#v", se.Realm, se.ID, msg)
 	return ctx
 }
 
