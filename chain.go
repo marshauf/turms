@@ -12,9 +12,9 @@ type Chain []Handler
 func (c *Chain) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
 	chainCtx := ctx
 	for i := range *c {
-		chainCtx = (*c)[i].Handle(chainCtx, conn, msg)
-		if chainCtx == nil {
-			chainCtx = ctx
+		rCtx := (*c)[i].Handle(chainCtx, conn, msg)
+		if rCtx != nil {
+			chainCtx = rCtx
 		}
 		select {
 		case <-chainCtx.Done():
