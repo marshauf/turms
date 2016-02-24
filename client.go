@@ -496,13 +496,15 @@ func (c *Client) handle() {
 			case *Welcome:
 				// TODO Protocol violation
 			case *Goodbye:
-				if m.Reason != GoodbyeAndOut {
+				switch m.Reason {
+				case GoodbyeAndOut:
+					// Received goodbye confirmation
+					// TODO check if request to close the session came from the client or router
+					c.gdbyWait.Unlock()
+				default:
+					// router send a goodbye message
 					ctx, _ := context.WithTimeout(c.ctx, c.timeout)
 					c.conn.Send(ctx, msg) // omitting err value because closing session anyway
-				}
-				// TODO check if request to close the session came from the client or router
-				if m.Reason == GoodbyeAndOut {
-					c.gdbyWait.Unlock()
 				}
 				return
 			case *Abort:

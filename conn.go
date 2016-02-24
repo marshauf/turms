@@ -91,8 +91,8 @@ func NewWebsocketConn(c *websocket.Conn) (Conn, error) {
 	return &WebsocketConn{
 		c:       c,
 		msgType: msgType,
-		dec:     codec.NewDecoderBytes(nil, h),
-		enc:     codec.NewEncoderBytes(nil, h),
+		dec:     codec.NewDecoderBytes([]byte{}, h),
+		enc:     codec.NewEncoderBytes(&[]byte{}, h),
 	}, nil
 }
 
