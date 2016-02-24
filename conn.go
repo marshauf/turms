@@ -5,6 +5,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/ugorji/go/codec"
 	"golang.org/x/net/context"
+	"io"
 	"sync"
 	"time"
 )
@@ -35,7 +36,10 @@ func (p *pipe) Read(ctx context.Context) (Message, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case msg := <-p.in:
+	case msg, ok := <-p.in:
+		if !ok {
+			return msg, io.EOF
+		}
 		return msg, nil
 	}
 }
