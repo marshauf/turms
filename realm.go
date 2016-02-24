@@ -159,7 +159,9 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 				ctx = NewErrorContext(ctx, err)
 			}
 		}
-		conn.Close()
+		se.Realm = URI("")
+		se.Details = nil
+
 		ctx, cancel := context.WithCancel(ctx)
 		cancel()
 		return ctx
