@@ -1,9 +1,7 @@
 package turms
 
 import (
-	"github.com/ugorji/go/codec"
 	"golang.org/x/net/context"
-	"net"
 	"sync"
 	"time"
 )
@@ -23,14 +21,14 @@ type Router struct {
 
 // Client creates an in-memory Client.
 func (r *Router) Client() *Client {
-	c1, c2 := net.Pipe()
-	go r.AcceptConn(c2, &codec.JsonHandle{})
+	c1, c2 := Pipe()
+	go r.AcceptConn(c2)
 
 	ctx := context.Background()
 	ctxHandle, cancelHandle := context.WithCancel(ctx)
 
 	return &Client{
-		conn:         NewConn(c1, &codec.JsonHandle{}),
+		conn:         c1,
 		ctx:          ctx,
 		ctxHandle:    ctxHandle,
 		cancelHandle: cancelHandle,
@@ -42,12 +40,11 @@ func (r *Router) Client() *Client {
 }
 
 // AcceptConn starts the routing process for the connection.
-func (r *Router) AcceptConn(conn net.Conn, h codec.Handle) {
-	r.handleConn(conn, h)
+func (r *Router) AcceptConn(conn Conn) {
+	r.handleConn(conn)
 }
 
-func (r *Router) handleConn(conn net.Conn, h codec.Handle) {
-	c := NewConn(conn, h)
+func (r *Router) handleConn(c Conn) {
 	r.mu.Lock()
 	r.conns = append(r.conns, c)
 	se := &Session{

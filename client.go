@@ -2,9 +2,9 @@ package turms
 
 import (
 	"fmt"
-	"github.com/ugorji/go/codec"
+	"github.com/gorilla/websocket"
 	"golang.org/x/net/context"
-	"golang.org/x/net/websocket"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -33,9 +33,8 @@ type Client struct {
 func Dial(url string) (*Client, error) {
 	info := &DialInfo{
 		URL:      url,
-		LocalURL: "http://localhost/",
+		Origin:   "http://localhost/",
 		Protocol: "wamp.2.json",
-		Codec:    &codec.JsonHandle{},
 		Timeout:  time.Second * 60,
 	}
 	return DialWithInfo(info)
@@ -43,9 +42,8 @@ func Dial(url string) (*Client, error) {
 
 type DialInfo struct {
 	URL      string
-	LocalURL string
+	Origin   string
 	Protocol string
-	Codec    codec.Handle
 	Timeout  time.Duration
 }
 
@@ -53,28 +51,32 @@ func DialWithInfo(info *DialInfo) (*Client, error) {
 	if !strings.HasPrefix(info.URL, "ws") {
 		return nil, fmt.Errorf("schema has to be ws")
 	}
-	config, err := websocket.NewConfig(info.URL, info.LocalURL)
+	reqHeader := http.Header{"Origin": []string{info.Origin}}
+	dialer := &websocket.Dialer{
+		Subprotocols:     []string{info.Protocol},
+		HandshakeTimeout: info.Timeout,
+	}
+	c, _, err := dialer.Dial(info.URL, reqHeader)
 	if err != nil {
 		return nil, err
 	}
-	config.Protocol = []string{info.Protocol}
-	ws, err := websocket.DialConfig(config)
-	if err != nil {
-		return nil, err
-	}
+	ws, err := NewWebsocketConn(c)
+	return NewClient(ws, info.Timeout), err
+}
+
+func NewClient(c Conn, timeout time.Duration) *Client {
 	ctx := context.Background()
 	ctxHandle, cancelHandle := context.WithCancel(ctx)
-	c := &Client{
-		conn:         NewConn(ws, info.Codec),
+	return &Client{
+		conn:         c,
 		ctx:          ctx,
 		ctxHandle:    ctxHandle,
 		cancelHandle: cancelHandle,
-		timeout:      info.Timeout,
+		timeout:      timeout,
 		sub:          newSubscriber(),
 		cal:          newCallee(),
 		req:          newWaitCondHandler(),
 	}
-	return c, nil
 }
 
 type Details interface {

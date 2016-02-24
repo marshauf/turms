@@ -1,10 +1,7 @@
 package turms
 
 import (
-	"github.com/ugorji/go/codec"
 	"golang.org/x/net/context"
-	"golang.org/x/net/websocket"
-	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -30,7 +27,6 @@ func (h *logHandler) Handle(ctx context.Context, c Conn, msg Message) context.Co
 
 var (
 	router  *Router
-	server  *httptest.Server
 	verbose = true
 	once    sync.Once
 
@@ -57,10 +53,6 @@ func startRouter() {
 			},
 		}
 	}
-	ws := websocket.Handler(func(ws *websocket.Conn) {
-		router.AcceptConn(ws, &codec.JsonHandle{})
-	})
-	server = httptest.NewServer(ws)
 }
 
 const timeout = time.Second
@@ -71,23 +63,17 @@ func newTimeoutContext() context.Context {
 }
 
 func TestRouterBasicProfile(t *testing.T) {
-	log.logf = t.Logf
+	log = &logHandler{logf: t.Logf}
 	once.Do(startRouter)
 
-	addr := "ws" + server.URL[len("http"):]
+	var err error
 	// Subscribe & Publish
-	publisher, err := Dial(addr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	publisher := router.Client()
 	err = publisher.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Publisher: true})
 	if err != nil {
 		t.Error(err)
 	}
-	subscriber, err := Dial(addr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	subscriber := router.Client()
 	err = subscriber.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Subscriber: true})
 	if err != nil {
 		t.Error(err)
@@ -131,19 +117,13 @@ func TestRouterBasicProfile(t *testing.T) {
 	}
 
 	// Register & Call
-	callee, err := Dial(addr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	callee := router.Client()
 	err = callee.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Callee: true})
 	if err != nil {
 		t.Error(err)
 	}
 
-	caller, err := Dial(addr)
-	if err != nil {
-		t.Fatal(err)
-	}
+	caller := router.Client()
 	err = caller.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Caller: true})
 	if err != nil {
 		t.Error(err)
@@ -195,7 +175,7 @@ func TestRouterBasicProfile(t *testing.T) {
 }
 
 func TestRouterMultipleClients(t *testing.T) {
-	log.logf = t.Logf
+	log = &logHandler{logf: t.Logf}
 	once.Do(startRouter)
 
 	numClients := 10
