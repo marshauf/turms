@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-type subscription struct {
+type Subscription struct {
 	id         ID
 	topic      URI
 	sessionID  ID
@@ -14,28 +14,59 @@ type subscription struct {
 }
 
 type broker struct {
-	subscriptions map[ID]*subscription
-	topics        map[URI][]*subscription
+	subscriptions map[ID]*Subscription
+	topics        map[URI][]*Subscription
 
 	mu sync.RWMutex
 }
 
-// Broker returns a handler that handles messages by routing incoming events
+type Broker interface {
+	Subscribe(ctx context.Context, topic URI, session *Session, conn Conn) *Subscription
+	Unsubscribe(ctx context.Context, subscription ID, session ID) error
+	Publish(ctx context.Context, topic URI, event *Event)
+	Subscriptions(ctx context.Context, topic URI) []*Subscription
+}
+
+// NewBroker returns a handler that handles messages by routing incoming events
 // from Publishers to Subscribers that are subscribed to respective topics.
 // Requires a Realm handler chained before the Broker.
-func Broker() Handler {
+func NewBroker() *broker {
 	return &broker{
-		subscriptions: make(map[ID]*subscription),
-		topics:        make(map[URI][]*subscription),
+		subscriptions: make(map[ID]*Subscription),
+		topics:        make(map[URI][]*Subscription),
 	}
 }
 
-func (b *broker) subscribe(topic URI, sessionID ID, idC *idCounter, conn Conn) ID {
+func (b *broker) Subscribe(ctx context.Context, topic URI, session *Session, conn Conn) *Subscription {
+	return b.subscribe(topic, session.ID, session.routerIDGen, conn)
+}
+
+func (b *broker) Unsubscribe(ctx context.Context, subscription ID, session ID) error {
+	return b.unsubscribe(subscription, session)
+}
+
+func (b *broker) Publish(ctx context.Context, topic URI, event *Event) {
+	subs := b.Subscriptions(ctx, topic)
+	for _, sub := range subs {
+		sub.subscriber.Send(ctx, event)
+	}
+}
+
+func (b *broker) Subscriptions(ctx context.Context, topic URI) []*Subscription {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if subs, ok := b.topics[topic]; ok {
+		return subs
+	}
+	return []*Subscription{}
+}
+
+func (b *broker) subscribe(topic URI, sessionID ID, idC *idCounter, conn Conn) *Subscription {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	subscriptionID := idC.Next()
-	sub := &subscription{
+	sub := &Subscription{
 		id:         subscriptionID,
 		topic:      topic,
 		sessionID:  sessionID,
@@ -44,12 +75,12 @@ func (b *broker) subscribe(topic URI, sessionID ID, idC *idCounter, conn Conn) I
 
 	t, ok := b.topics[topic]
 	if !ok {
-		b.topics[topic] = []*subscription{sub}
-		return subscriptionID
+		b.topics[topic] = []*Subscription{sub}
+		return sub
 	}
 	b.topics[topic] = append(t, sub)
 	b.subscriptions[subscriptionID] = sub
-	return subscriptionID
+	return sub
 }
 
 func (b *broker) unsubscribe(subscriptionID ID, sessionID ID) error {
@@ -78,15 +109,6 @@ func (b *broker) unsubscribe(subscriptionID ID, sessionID ID) error {
 	return nil
 }
 
-func (b *broker) getSubscriptions(topic URI) []*subscription {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if subs, ok := b.topics[topic]; ok {
-		return subs
-	}
-	return []*subscription{}
-}
-
 // Handle processes incoming Broker related messages and may communicated back with the connection in the provided context.
 func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
 	se, hasSession := SessionFromContext(ctx)
@@ -96,8 +118,8 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 
 	switch m := msg.(type) {
 	case *Subscribe:
-		topicID := b.subscribe(m.Topic, se.ID, se.routerIDGen, conn)
-		subscribedMsg := &Subscribed{SubscribedCode, m.Request, topicID}
+		sub := b.subscribe(m.Topic, se.ID, se.routerIDGen, conn)
+		subscribedMsg := &Subscribed{SubscribedCode, m.Request, sub.id}
 		err := conn.Send(ctx, subscribedMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
@@ -123,7 +145,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		}
 		return ctx
 	case *Publish:
-		subscriptions := b.getSubscriptions(m.Topic)
+		subscriptions := b.Subscriptions(ctx, m.Topic)
 
 		publicationID := NewGlobalID()
 		for _, sub := range subscriptions {

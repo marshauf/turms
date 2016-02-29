@@ -40,16 +40,16 @@ func startRouter() {
 			Realm(realmName),
 			log,
 			&Chain{
-				Broker(),
-				Dealer(),
+				NewBroker(),
+				NewDealer(),
 			},
 		}
 	} else {
 		router.Handler = &Chain{
 			Realm(realmName),
 			&Chain{
-				Broker(),
-				Dealer(),
+				NewBroker(),
+				NewDealer(),
 			},
 		}
 	}

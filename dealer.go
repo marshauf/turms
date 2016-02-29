@@ -4,9 +4,29 @@ import (
 	"fmt"
 	"golang.org/x/net/context"
 	"sync"
+	"time"
 )
 
+type RegistrationDetails struct {
+	ID               ID
+	Created          time.Time
+	Procedure        URI
+	MatchPolicy      string
+	InvocationPolicy string
+}
+
+type Dealer interface {
+	Register(ctx context.Context, procedure URI, session *Session, conn Conn) (ID, error)
+	Unregister(ctx context.Context, procedure ID, session ID) error
+
+	Registrations(ctx context.Context) (exact []ID, prefix []ID, wildcard []ID)
+	Registration(ctx context.Context, procedure URI, options map[string]interface{}) (registration ID, exists bool)
+	RegistrationDetails(ctx context.Context, registration ID) (*RegistrationDetails, error)
+	Callees(ctx context.Context, registration ID) ([]ID, error)
+}
+
 type dealer struct {
+	// TODO Use RegistrationDetails
 	// registrationID->SessionID
 	endpoints   map[ID]map[ID]Conn
 	procedures  map[URI]ID
@@ -15,17 +35,70 @@ type dealer struct {
 	mu          sync.RWMutex
 }
 
-// Dealer returns a handler that handles messages by routing calls
+// NewDealer returns a handler that handles messages by routing calls
 // from incoming Callers to Callees implementing the procedure called,
 // and route call results back from Callees to Callers.
 // Requires a Realm handler chained before the Dealer.
-func Dealer() Handler {
+func NewDealer() *dealer {
 	return &dealer{
 		endpoints:   make(map[ID]map[ID]Conn),
 		procedures:  make(map[URI]ID),
 		calls:       make(map[ID]ID),
 		invocations: make(map[ID]Conn),
 	}
+}
+
+func (d *dealer) Register(ctx context.Context, procedure URI, session *Session, conn Conn) (ID, error) {
+	return d.registerEndpoint(procedure, session.ID, session.routerIDGen, conn)
+}
+
+func (d *dealer) Unregister(ctx context.Context, procedure ID, session ID) error {
+	return d.unregisterEndpoint(procedure, session)
+}
+
+// Registrations returns all registered procedures.
+func (d *dealer) Registrations(ctx context.Context) (exact []ID, prefix []ID, wildcard []ID) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	exact = make([]ID, len(d.endpoints))
+	prefix = []ID{}   // Not yet implemented
+	wildcard = []ID{} // Not yet implemented
+	i := 0
+	for id := range d.endpoints {
+		exact[i] = id
+		i++
+	}
+	return
+}
+
+func (d *dealer) Registration(ctx context.Context, procedure URI, options map[string]interface{}) (registration ID, exists bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	registration, exists = d.procedures[procedure]
+	return
+}
+
+func (d *dealer) RegistrationDetails(ctx context.Context, registration ID) (*RegistrationDetails, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	// TODO fill details
+	details := &RegistrationDetails{
+		ID: registration,
+	}
+	return details, nil
+}
+
+func (d *dealer) Callees(ctx context.Context, registration ID) ([]ID, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	endpoints := d.endpoints[registration]
+	callees := make([]ID, len(endpoints))
+	i := 0
+	for id := range endpoints {
+		callees[i] = id
+		i++
+	}
+	return callees, nil
 }
 
 func (d *dealer) registerEndpoint(procedure URI, sessionID ID, idC *idCounter, conn Conn) (ID, error) {
@@ -43,7 +116,7 @@ func (d *dealer) registerEndpoint(procedure URI, sessionID ID, idC *idCounter, c
 	return procedureID, nil
 }
 
-func (d *dealer) unregisterEndpoint(procedureID ID, sessionID ID, conn Conn) error {
+func (d *dealer) unregisterEndpoint(procedureID ID, sessionID ID) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	procedure, exist := d.endpoints[procedureID]
@@ -102,7 +175,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, err)
 		}
 	case *Unregister:
-		err := d.unregisterEndpoint(m.Registration, se.ID, conn)
+		err := d.unregisterEndpoint(m.Registration, se.ID)
 		if err != nil {
 			errMsg := &Error{ErrorCode, UnregisterCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
 			if err == &NotAuthorized {
