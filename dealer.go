@@ -25,14 +25,22 @@ type Dealer interface {
 	Callees(ctx context.Context, registration ID) ([]ID, error)
 }
 
+type calleeReg struct {
+	session ID
+	conn    Conn
+}
+
+type registration struct {
+	Callees []*calleeReg
+	Details *RegistrationDetails
+}
+
 type dealer struct {
-	// TODO Use RegistrationDetails
-	// registrationID->SessionID
-	endpoints   map[ID]map[ID]Conn
-	procedures  map[URI]ID
-	calls       map[ID]ID
-	invocations map[ID]Conn
-	mu          sync.RWMutex
+	registrations map[ID]*registration
+	procedures    map[URI]ID
+	calls         map[ID]ID
+	invocations   map[ID]Conn
+	mu            sync.RWMutex
 }
 
 // NewDealer returns a handler that handles messages by routing calls
@@ -41,30 +49,30 @@ type dealer struct {
 // Requires a Realm handler chained before the Dealer.
 func NewDealer() *dealer {
 	return &dealer{
-		endpoints:   make(map[ID]map[ID]Conn),
-		procedures:  make(map[URI]ID),
-		calls:       make(map[ID]ID),
-		invocations: make(map[ID]Conn),
+		registrations: make(map[ID]*registration),
+		procedures:    make(map[URI]ID),
+		calls:         make(map[ID]ID),
+		invocations:   make(map[ID]Conn),
 	}
 }
 
 func (d *dealer) Register(ctx context.Context, procedure URI, session *Session, conn Conn) (ID, error) {
-	return d.registerEndpoint(procedure, session.ID, session.routerIDGen, conn)
+	return d.register(procedure, session.ID, session.routerIDGen, conn)
 }
 
 func (d *dealer) Unregister(ctx context.Context, procedure ID, session ID) error {
-	return d.unregisterEndpoint(procedure, session)
+	return d.unregister(procedure, session)
 }
 
 // Registrations returns all registered procedures.
 func (d *dealer) Registrations(ctx context.Context) (exact []ID, prefix []ID, wildcard []ID) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	exact = make([]ID, len(d.endpoints))
+	exact = make([]ID, len(d.registrations))
 	prefix = []ID{}   // Not yet implemented
 	wildcard = []ID{} // Not yet implemented
 	i := 0
-	for id := range d.endpoints {
+	for id := range d.registrations {
 		exact[i] = id
 		i++
 	}
@@ -91,46 +99,62 @@ func (d *dealer) RegistrationDetails(ctx context.Context, registration ID) (*Reg
 func (d *dealer) Callees(ctx context.Context, registration ID) ([]ID, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	endpoints := d.endpoints[registration]
-	callees := make([]ID, len(endpoints))
+	callees := d.registrations[registration].Callees
+	ids := make([]ID, len(callees))
 	i := 0
-	for id := range endpoints {
-		callees[i] = id
+	for _, c := range callees {
+		ids[i] = c.session
 		i++
 	}
-	return callees, nil
+	return ids, nil
 }
 
-func (d *dealer) registerEndpoint(procedure URI, sessionID ID, idC *idCounter, conn Conn) (ID, error) {
+func (d *dealer) register(procedure URI, sessionID ID, idC *idCounter, conn Conn) (ID, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	procedureID, exist := d.procedures[procedure]
+	registrationID, exist := d.procedures[procedure]
 	if exist {
 		return 0, &ProcedureAlreadyExists
 	}
-	procedureID = idC.Next()
-	d.procedures[procedure] = procedureID
-	d.endpoints[procedureID] = map[ID]Conn{
-		sessionID: conn,
+	registrationID = idC.Next()
+	d.procedures[procedure] = registrationID
+	d.registrations[registrationID] = &registration{
+		Callees: []*calleeReg{&calleeReg{sessionID, conn}},
+		Details: &RegistrationDetails{
+			ID:               registrationID,
+			Created:          time.Now(),
+			Procedure:        procedure,
+			MatchPolicy:      "",
+			InvocationPolicy: "",
+		},
 	}
-	return procedureID, nil
+	return registrationID, nil
 }
 
-func (d *dealer) unregisterEndpoint(procedureID ID, sessionID ID) error {
+func (d *dealer) unregister(registrationID ID, sessionID ID) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	procedure, exist := d.endpoints[procedureID]
+	reg, exist := d.registrations[registrationID]
 	if !exist {
 		return &NoSuchProcedure
 	}
-	_, valid := procedure[sessionID]
+
+	valid := false
+	for _, c := range reg.Callees {
+		if c.session == sessionID {
+			valid = true
+			break
+		}
+	}
 	if !valid {
 		return &NotAuthorized
 	}
-	delete(d.endpoints, procedureID)
-	for key, value := range d.procedures {
-		if value == procedureID {
-			delete(d.procedures, key)
+
+	delete(d.registrations, registrationID)
+
+	for name, id := range d.procedures {
+		if id == registrationID {
+			delete(d.procedures, name)
 			return nil
 		}
 	}
@@ -144,12 +168,9 @@ func (d *dealer) getEndpoint(procedureURI URI) (Conn, ID, error) {
 	if !exist {
 		return nil, 0, &NoSuchProcedure
 	}
-	endpoint := d.endpoints[procedureID]
-	for sessionID := range endpoint {
-		return endpoint[sessionID], procedureID, nil
-	}
-	// TODO This should not happen
-	return nil, 0, &NetworkFailure
+	reg := d.registrations[procedureID]
+	callee := reg.Callees[0]
+	return callee.conn, procedureID, nil
 }
 
 func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
@@ -160,7 +181,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 
 	switch m := msg.(type) {
 	case *Register:
-		registrationID, err := d.registerEndpoint(m.Procedure, se.ID, se.routerIDGen, conn)
+		registrationID, err := d.register(m.Procedure, se.ID, se.routerIDGen, conn)
 		if err != nil {
 			errMsg := &Error{ErrorCode, RegisterCode, m.Request, map[string]interface{}{}, URI("wamp.error.procedure_already_exists"), nil, nil}
 			err = conn.Send(ctx, errMsg)
@@ -175,7 +196,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, err)
 		}
 	case *Unregister:
-		err := d.unregisterEndpoint(m.Registration, se.ID)
+		err := d.unregister(m.Registration, se.ID)
 		if err != nil {
 			errMsg := &Error{ErrorCode, UnregisterCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
 			if err == &NotAuthorized {
