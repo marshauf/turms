@@ -48,6 +48,7 @@ func (b *broker) subscribe(topic URI, sessionID ID, idC *idCounter, conn Conn) I
 		return subscriptionID
 	}
 	b.topics[topic] = append(t, sub)
+	b.subscriptions[subscriptionID] = sub
 	return subscriptionID
 }
 
