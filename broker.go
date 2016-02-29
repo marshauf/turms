@@ -23,7 +23,7 @@ type broker struct {
 type Broker interface {
 	Subscribe(ctx context.Context, topic URI, session *Session, conn Conn) *Subscription
 	Unsubscribe(ctx context.Context, subscription ID, session ID) error
-	Publish(ctx context.Context, topic URI, event *Event)
+	Publish(ctx context.Context, topic URI, details map[string]interface{}, args []interface{}, argsKW map[string]interface{}) error
 	Subscriptions(ctx context.Context, topic URI) []*Subscription
 }
 
@@ -45,11 +45,19 @@ func (b *broker) Unsubscribe(ctx context.Context, subscription ID, session ID) e
 	return b.unsubscribe(subscription, session)
 }
 
-func (b *broker) Publish(ctx context.Context, topic URI, event *Event) {
+func (b *broker) Publish(ctx context.Context, topic URI, details map[string]interface{}, args []interface{}, argsKW map[string]interface{}) error {
 	subs := b.Subscriptions(ctx, topic)
+	publicationID := NewGlobalID()
 	for _, sub := range subs {
-		sub.subscriber.Send(ctx, event)
+		event := &Event{EventCode,
+			sub.id, publicationID, details, args, argsKW,
+		}
+		err := sub.subscriber.Send(ctx, event)
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (b *broker) Subscriptions(ctx context.Context, topic URI) []*Subscription {
