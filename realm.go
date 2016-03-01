@@ -1,7 +1,7 @@
 package turms
 
 import (
-	"fmt"
+	"errors"
 	"golang.org/x/net/context"
 	"sync"
 )
@@ -9,6 +9,12 @@ import (
 const (
 	sessionContextKey = "session"
 	errorContextKey   = "error"
+)
+
+var (
+	ErrRoleExist         = errors.New("role already exists")
+	ErrRoleNotExist      = errors.New("role does not exist")
+	ErrProtocolViolation = errors.New("protocol violation")
 )
 
 // Session stores the values and optional configuration for a session.
@@ -84,7 +90,7 @@ func (r *realm) RegisterRole(name string) error {
 	defer r.mu.Unlock()
 	_, exist := r.roles[name]
 	if exist {
-		return fmt.Errorf("Role %s already exist", name)
+		return ErrRoleExist
 	}
 	r.roles[name] = nil
 	return nil
@@ -95,7 +101,7 @@ func (r *realm) RegisterFeatures(name string, features ...string) error {
 	defer r.mu.Unlock()
 	rl, exist := r.roles[name]
 	if !exist {
-		return fmt.Errorf("Role %s does not exist", name)
+		return ErrRoleNotExist
 	}
 	if rl == nil {
 		featureMap := make(map[string]bool)
@@ -118,7 +124,6 @@ func handleProtocolViolation(ctx context.Context, conn Conn) error {
 }
 
 func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
-
 	se, hasSession := SessionFromContext(ctx)
 	if !hasSession {
 		panic("router did not provide a session variable in the context")
@@ -131,7 +136,7 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 			handleProtocolViolation(ctx, conn)
 			ctx, cancel := context.WithCancel(ctx)
 			cancel()
-			return NewErrorContext(ctx, fmt.Errorf("Protocol violation"))
+			return NewErrorContext(ctx, ErrProtocolViolation)
 		}
 
 		// assign session to this  realm
@@ -162,12 +167,6 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 		se.Realm = URI("")
 		se.Details = nil
 
-		ctx, cancel := context.WithCancel(ctx)
-		cancel()
-		return ctx
-	}
-
-	if !hasSession {
 		ctx, cancel := context.WithCancel(ctx)
 		cancel()
 		return ctx

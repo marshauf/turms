@@ -1,9 +1,14 @@
 package turms
 
 import (
-	"fmt"
+	"errors"
 	"golang.org/x/net/context"
 	"sync"
+)
+
+var (
+	ErrNoSession = errors.New("session does not exist in context")
+	ErrNoSub     = errors.New("subscription does not exist")
 )
 
 type Subscription struct {
@@ -121,7 +126,7 @@ func (b *broker) unsubscribe(subscriptionID ID, sessionID ID) error {
 func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
 	se, hasSession := SessionFromContext(ctx)
 	if !hasSession {
-		return NewErrorContext(ctx, fmt.Errorf("Broker requires a session stored in the context"))
+		return NewErrorContext(ctx, ErrNoSession)
 	}
 
 	switch m := msg.(type) {
@@ -143,7 +148,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			if err != nil {
 				return NewErrorContext(ctx, err)
 			}
-			return NewErrorContext(ctx, fmt.Errorf("No such subscription"))
+			return NewErrorContext(ctx, ErrNoSub)
 		}
 
 		msg := &Unsubscribed{UnsubscribedCode, m.Request}

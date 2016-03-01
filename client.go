@@ -1,13 +1,18 @@
 package turms
 
 import (
-	"fmt"
+	"errors"
 	"github.com/gorilla/websocket"
 	"golang.org/x/net/context"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+)
+
+var (
+	ErrNotWS       = errors.New("not a websocket schema")
+	ErrNoProcedure = errors.New("procedure does not exist")
 )
 
 // A Client is a Peer which connects to a Router.
@@ -49,7 +54,7 @@ type DialInfo struct {
 
 func DialWithInfo(info *DialInfo) (*Client, error) {
 	if !strings.HasPrefix(info.URL, "ws") {
-		return nil, fmt.Errorf("schema has to be ws")
+		return nil, ErrNotWS
 	}
 	reqHeader := http.Header{"Origin": []string{info.Origin}}
 	dialer := &websocket.Dialer{
@@ -146,7 +151,7 @@ func (c *Client) JoinRealm(ctx context.Context, realm URI, details Details) erro
 		c.serverDetails = m.Details
 		c.sessionID = m.Session
 	default:
-		return fmt.Errorf("Unexpected message %s", m.Type())
+		return ErrProtocolViolation
 	}
 
 	go c.handle()
@@ -237,7 +242,7 @@ func (s *subscriber) unsubscribe(topic URI) error {
 	defer s.mu.Unlock()
 	sub, ok := s.topics[topic]
 	if !ok {
-		return fmt.Errorf("No %s subscription", topic)
+		return ErrNoSub
 	}
 	close(s.subscriptions[sub])
 	delete(s.topics, topic)
@@ -275,15 +280,15 @@ func (c *Client) Subscribe(ctx context.Context, topic URI) (<-chan *Event, error
 		p := c.sub.subscribe(m.Subscription, topic)
 		return p, nil
 	case *Error:
-		return nil, fmt.Errorf("%s", m.Error)
+		return nil, &m.Error
 	}
-	return nil, fmt.Errorf("Unknown message code response %d", resp.Type())
+	return nil, ErrProtocolViolation
 }
 
 func (c *Client) Unsubscribe(ctx context.Context, topic URI) error {
 	subID, exist := c.sub.subscriptionID(topic)
 	if !exist {
-		return fmt.Errorf("No subscription to %s exists", topic)
+		return ErrNoSub
 	}
 	reqID := c.counter.Next()
 	msg := &Unsubscribe{UnsubscribeCode, reqID, subID}
@@ -303,9 +308,9 @@ func (c *Client) Unsubscribe(ctx context.Context, topic URI) error {
 	case *Unsubscribed:
 		return c.sub.unsubscribe(topic)
 	case *Error:
-		return fmt.Errorf("%s", m.Error)
+		return &m.Error
 	}
-	return fmt.Errorf("Unknown message code response %d", resp.Type())
+	return ErrProtocolViolation
 }
 
 func (c *Client) Publish(ctx context.Context, options Options, topic URI, args []interface{}, argsKW map[string]interface{}) error {
@@ -338,9 +343,9 @@ func (c *Client) Publish(ctx context.Context, options Options, topic URI, args [
 	case *Published:
 		return nil
 	case *Error:
-		return fmt.Errorf("%s", m.Error)
+		return &m.Error
 	}
-	return fmt.Errorf("Unknown message code response %d", resp.Type())
+	return ErrProtocolViolation
 }
 
 type InvocationHandler func(context.Context, *Invocation) ([]interface{}, map[string]interface{}, error)
@@ -370,7 +375,7 @@ func (c *callee) unregister(name URI) error {
 	defer c.mu.Unlock()
 	regID, ok := c.procedures[name]
 	if !ok {
-		return fmt.Errorf("No procedure %s registered", name)
+		return ErrNoProcedure
 	}
 	delete(c.procedures, name)
 	delete(c.registrations, regID)
@@ -412,15 +417,15 @@ func (c *Client) Register(ctx context.Context, name URI, h InvocationHandler) er
 		c.cal.register(m.Registration, name, h)
 		return nil
 	case *Error:
-		return fmt.Errorf("%s", m.Error)
+		return &m.Error
 	}
-	return fmt.Errorf("Unknown message code response %d", resp.Type())
+	return ErrProtocolViolation
 }
 
 func (c *Client) Unregister(ctx context.Context, name URI) error {
 	procedureID, exist := c.cal.registrationID(name)
 	if !exist {
-		return fmt.Errorf("No procedure %s registered", name)
+		return ErrNoProcedure
 	}
 	reqID := c.counter.Next()
 	msg := &Unregister{UnregisterCode, reqID, procedureID}
@@ -440,9 +445,9 @@ func (c *Client) Unregister(ctx context.Context, name URI) error {
 	case *Unregistered:
 		return c.cal.unregister(name)
 	case *Error:
-		return fmt.Errorf("%s", m.Error)
+		return &m.Error
 	}
-	return fmt.Errorf("Unknown message code response %d", resp.Type())
+	return ErrProtocolViolation
 }
 
 func (c *Client) Call(ctx context.Context, procedure URI, args []interface{}, argsKW map[string]interface{}) (*Result, error) {
@@ -466,9 +471,9 @@ func (c *Client) Call(ctx context.Context, procedure URI, args []interface{}, ar
 	case *Result:
 		return m, nil
 	case *Error:
-		return nil, fmt.Errorf("%s", m.Error)
+		return nil, &m.Error
 	}
-	return nil, fmt.Errorf("Unknown message code response %d", resp.Type())
+	return nil, ErrProtocolViolation
 }
 
 func (c *Client) Send(ctx context.Context, message Message) error {

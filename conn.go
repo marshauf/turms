@@ -1,7 +1,7 @@
 package turms
 
 import (
-	"fmt"
+	"errors"
 	"github.com/gorilla/websocket"
 	"github.com/ugorji/go/codec"
 	"golang.org/x/net/context"
@@ -63,6 +63,10 @@ const (
 	subprotocolIdentifierMsgPack = "wamp.2.msgpack"
 )
 
+var (
+	ErrWrongSubprotocol = errors.New("wrong subprotocol")
+)
+
 type WebsocketConn struct {
 	c       *websocket.Conn
 	msgType int
@@ -86,7 +90,7 @@ func NewWebsocketConn(c *websocket.Conn) (Conn, error) {
 		h = &codec.MsgpackHandle{}
 		msgType = websocket.BinaryMessage
 	default:
-		return nil, fmt.Errorf("Unsupported subprotocol %s", subProtocol)
+		return nil, ErrWrongSubprotocol
 	}
 	return &WebsocketConn{
 		c:       c,

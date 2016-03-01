@@ -1,10 +1,26 @@
 package turms
 
 import (
-	"fmt"
+	"errors"
 	"golang.org/x/net/context"
 	"sync"
 	"time"
+)
+
+var (
+	EvOnCreate       = URI("wamp.registration.on_create")
+	EvOnRegister     = URI("wamp.registration.on_register")
+	EvOnUnregister   = URI("wamp.registration.on_unregister")
+	EvOnDelete       = URI("wamp.registration.on_delete")
+	ProcList         = URI("wamp.registration.list")
+	ProcLookUp       = URI("wamp.registration.lookup")
+	ProcMatch        = URI("wamp.registration.match")
+	ProcGet          = URI("wamp.registration.get")
+	ProcListCallees  = URI("wamp.registration.list_callees")
+	ProcCountCallees = URI("wamp.registration.count_callees")
+
+	ErrNoCaller = errors.New("caller does not exist")
+	ErrNoCall   = errors.New("call does not exist")
 )
 
 type RegistrationDetails struct {
@@ -176,7 +192,7 @@ func (d *dealer) getEndpoint(procedureURI URI) (Conn, ID, error) {
 func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
 	se, hasSession := SessionFromContext(ctx)
 	if !hasSession {
-		return NewErrorContext(ctx, fmt.Errorf("Broker requires a session stored in the context"))
+		return NewErrorContext(ctx, ErrNoSession)
 	}
 
 	switch m := msg.(type) {
@@ -239,12 +255,13 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 	case *Yield:
 		caller, hasCaller := d.invocations[m.Request]
 		if !hasCaller {
-			return NewErrorContext(ctx, fmt.Errorf("No caller found"))
+			return NewErrorContext(ctx, ErrNoCaller)
+
 		}
 
 		callReqID, hasCallID := d.calls[m.Request]
 		if !hasCallID {
-			return NewErrorContext(ctx, fmt.Errorf("No call ID found"))
+			return NewErrorContext(ctx, ErrNoCall)
 		}
 		details := map[string]interface{}{}
 		resMsg := &Result{ResultCode, callReqID, details, m.Args, m.ArgsKW}
@@ -258,12 +275,12 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		}
 		caller, hasCaller := d.invocations[m.Request]
 		if !hasCaller {
-			return NewErrorContext(ctx, fmt.Errorf("No caller found"))
+			return NewErrorContext(ctx, ErrNoCaller)
 		}
 
 		callReqID, hasCallID := d.calls[m.Request]
 		if !hasCallID {
-			return NewErrorContext(ctx, fmt.Errorf("No call ID found"))
+			return NewErrorContext(ctx, ErrNoCall)
 		}
 		respMsg := &Error{ErrorCode, CallCode, callReqID, m.Details, m.Error, m.Args, m.ArgsKW}
 		err := caller.Send(ctx, respMsg)
