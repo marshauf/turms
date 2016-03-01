@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	sessionContextKey = "session"
-	errorContextKey   = "error"
+	clientSessionContextKey = "clientsession"
+	routerSessionContextKey = "routersession"
+	errorContextKey         = "error"
 )
 
 var (
@@ -17,39 +18,71 @@ var (
 	ErrProtocolViolation = errors.New("protocol violation")
 )
 
-// Session stores the values and optional configuration for a session.
-type Session struct {
-	// ID is the session ID.
-	ID ID
-	// Details stores additional connection opening information.
-	Details map[string]interface{}
+type RouterSession struct {
+	gen *idCounter
+}
 
-	Realm URI
+func (s *RouterSession) RouterID() ID {
+	return s.gen.Next()
+}
 
-	// The ID generator at the session scope
-	counter idCounter
-	// The ID generator at the router scope
-	routerIDGen *idCounter
+type RealmSession struct {
+	mu sync.RWMutex
+}
+
+// ClientSession stores the values and optional configuration for a client session.
+type ClientSession struct {
+	id      ID
+	realm   URI
+	details map[string]interface{}
+	gen     idCounter
+	mu      sync.RWMutex
+}
+
+func (s *ClientSession) ID() ID {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.id
 }
 
 // SessionID returns a new ID in the session scope.
-func (s *Session) SessionID() ID {
-	return s.counter.Next()
+func (s *ClientSession) SessionID() ID {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.gen.Next()
 }
 
-// RouterID returns a new ID in the router scope.
-func (s *Session) RouterID() ID {
-	return s.routerIDGen.Next()
+func (s *ClientSession) Details() map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.details
 }
 
-// NewSessionContext returns a child context with the session value stored in it.
-func NewSessionContext(ctx context.Context, session *Session) context.Context {
-	return context.WithValue(ctx, sessionContextKey, session)
+func (s *ClientSession) Realm() URI {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.realm
 }
 
-// SessionFromContext extracts the session value from the context.
-func SessionFromContext(ctx context.Context) (*Session, bool) {
-	s, ok := ctx.Value(sessionContextKey).(*Session)
+// NewClientSessionContext returns a child context with the client session value stored in it.
+func NewClientSessionContext(ctx context.Context, session *ClientSession) context.Context {
+	return context.WithValue(ctx, clientSessionContextKey, session)
+}
+
+// ClientSessionFromContext extracts the session value from the context.
+func ClientSessionFromContext(ctx context.Context) (*ClientSession, bool) {
+	s, ok := ctx.Value(clientSessionContextKey).(*ClientSession)
+	return s, ok
+}
+
+// NewRouterSessionContext returns a child context with the client session value stored in it.
+func NewRouterContext(ctx context.Context, session *RouterSession) context.Context {
+	return context.WithValue(ctx, routerSessionContextKey, session)
+}
+
+// RouterSessionFromContext extracts the session value from the context.
+func RouterSessionFromContext(ctx context.Context) (*RouterSession, bool) {
+	s, ok := ctx.Value(routerSessionContextKey).(*RouterSession)
 	return s, ok
 }
 
@@ -124,7 +157,7 @@ func handleProtocolViolation(ctx context.Context, conn Conn) error {
 }
 
 func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
-	se, hasSession := SessionFromContext(ctx)
+	se, hasSession := ClientSessionFromContext(ctx)
 	if !hasSession {
 		panic("router did not provide a session variable in the context")
 	}
@@ -132,7 +165,7 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 	switch m := msg.(type) {
 	case *Hello:
 		// Check if the session is already established with a realm
-		if len(se.Realm) != 0 {
+		if len(se.Realm()) != 0 {
 			handleProtocolViolation(ctx, conn)
 			ctx, cancel := context.WithCancel(ctx)
 			cancel()
@@ -140,16 +173,16 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 		}
 
 		// assign session to this  realm
-		se.ID = NewGlobalID()
-		se.Realm = r.name
-		se.Details = m.Details
+		se.id = NewGlobalID()
+		se.realm = r.name
+		se.details = m.Details
 
-		welcomeMsg := &Welcome{WelcomeCode, se.ID, r.details()}
+		welcomeMsg := &Welcome{WelcomeCode, se.ID(), r.details()}
 		err := conn.Send(ctx, welcomeMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
 		}
-		return NewSessionContext(ctx, se)
+		return ctx
 	case *Abort:
 		conn.Close()
 		ctx, cancel := context.WithCancel(ctx)
@@ -164,14 +197,15 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 				ctx = NewErrorContext(ctx, err)
 			}
 		}
-		se.Realm = URI("")
-		se.Details = nil
+		se.id = 0
+		se.realm = URI("")
+		se.details = nil
 
 		ctx, cancel := context.WithCancel(ctx)
 		cancel()
 		return ctx
 	}
-	return NewSessionContext(ctx, se)
+	return ctx
 }
 
 func (r *realm) details() map[string]interface{} {

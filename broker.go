@@ -26,7 +26,7 @@ type broker struct {
 }
 
 type Broker interface {
-	Subscribe(ctx context.Context, topic URI, session *Session, conn Conn) *Subscription
+	Subscribe(ctx context.Context, topic URI, clientSe *ClientSession, routerSe *RouterSession, conn Conn) *Subscription
 	Unsubscribe(ctx context.Context, subscription ID, session ID) error
 	Publish(ctx context.Context, topic URI, details map[string]interface{}, args []interface{}, argsKW map[string]interface{}) error
 	Subscriptions(ctx context.Context, topic URI) []*Subscription
@@ -42,8 +42,8 @@ func NewBroker() *broker {
 	}
 }
 
-func (b *broker) Subscribe(ctx context.Context, topic URI, session *Session, conn Conn) *Subscription {
-	return b.subscribe(topic, session.ID, session.routerIDGen, conn)
+func (b *broker) Subscribe(ctx context.Context, topic URI, clientSe *ClientSession, routerSe *RouterSession, conn Conn) *Subscription {
+	return b.subscribe(topic, clientSe.ID(), routerSe.gen, conn)
 }
 
 func (b *broker) Unsubscribe(ctx context.Context, subscription ID, session ID) error {
@@ -124,14 +124,18 @@ func (b *broker) unsubscribe(subscriptionID ID, sessionID ID) error {
 
 // Handle processes incoming Broker related messages and may communicated back with the connection in the provided context.
 func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
-	se, hasSession := SessionFromContext(ctx)
+	se, hasSession := ClientSessionFromContext(ctx)
+	if !hasSession {
+		return NewErrorContext(ctx, ErrNoSession)
+	}
+	rse, hasSession := RouterSessionFromContext(ctx)
 	if !hasSession {
 		return NewErrorContext(ctx, ErrNoSession)
 	}
 
 	switch m := msg.(type) {
 	case *Subscribe:
-		sub := b.subscribe(m.Topic, se.ID, se.routerIDGen, conn)
+		sub := b.subscribe(m.Topic, se.ID(), rse.gen, conn)
 		subscribedMsg := &Subscribed{SubscribedCode, m.Request, sub.id}
 		err := conn.Send(ctx, subscribedMsg)
 		if err != nil {
@@ -139,7 +143,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		}
 		return ctx
 	case *Unsubscribe:
-		err := b.unsubscribe(m.Subscription, se.ID)
+		err := b.unsubscribe(m.Subscription, se.ID())
 		if err != nil {
 			errMsg := &Error{ErrorCode,
 				UnsubscribeCode, m.Request, map[string]interface{}{}, "wamp.error.no_such_subscription", nil, nil,
@@ -163,7 +167,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		publicationID := NewGlobalID()
 		for _, sub := range subscriptions {
 			// Don't send a published event to the pubisher itself
-			if se.ID == sub.sessionID {
+			if se.ID() == sub.sessionID {
 				continue
 			}
 			eventMsg := &Event{EventCode,

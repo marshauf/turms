@@ -32,7 +32,7 @@ type RegistrationDetails struct {
 }
 
 type Dealer interface {
-	Register(ctx context.Context, procedure URI, session *Session, conn Conn) (ID, error)
+	Register(ctx context.Context, procedure URI, clientSe *ClientSession, routerSe *RouterSession, conn Conn) (ID, error)
 	Unregister(ctx context.Context, procedure ID, session ID) error
 
 	Registrations(ctx context.Context) (exact []ID, prefix []ID, wildcard []ID)
@@ -72,8 +72,8 @@ func NewDealer() *dealer {
 	}
 }
 
-func (d *dealer) Register(ctx context.Context, procedure URI, session *Session, conn Conn) (ID, error) {
-	return d.register(procedure, session.ID, session.routerIDGen, conn)
+func (d *dealer) Register(ctx context.Context, procedure URI, clientSe *ClientSession, routerSe *RouterSession, conn Conn) (ID, error) {
+	return d.register(procedure, clientSe.ID(), routerSe.gen, conn)
 }
 
 func (d *dealer) Unregister(ctx context.Context, procedure ID, session ID) error {
@@ -190,14 +190,18 @@ func (d *dealer) getEndpoint(procedureURI URI) (Conn, ID, error) {
 }
 
 func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
-	se, hasSession := SessionFromContext(ctx)
+	se, hasSession := ClientSessionFromContext(ctx)
+	if !hasSession {
+		return NewErrorContext(ctx, ErrNoSession)
+	}
+	rse, hasSession := RouterSessionFromContext(ctx)
 	if !hasSession {
 		return NewErrorContext(ctx, ErrNoSession)
 	}
 
 	switch m := msg.(type) {
 	case *Register:
-		registrationID, err := d.register(m.Procedure, se.ID, se.routerIDGen, conn)
+		registrationID, err := d.register(m.Procedure, se.ID(), rse.gen, conn)
 		if err != nil {
 			errMsg := &Error{ErrorCode, RegisterCode, m.Request, map[string]interface{}{}, URI("wamp.error.procedure_already_exists"), nil, nil}
 			err = conn.Send(ctx, errMsg)
@@ -212,7 +216,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, err)
 		}
 	case *Unregister:
-		err := d.unregister(m.Registration, se.ID)
+		err := d.unregister(m.Registration, se.ID())
 		if err != nil {
 			errMsg := &Error{ErrorCode, UnregisterCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
 			if err == &NotAuthorized {

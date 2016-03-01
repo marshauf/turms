@@ -47,10 +47,11 @@ func (r *Router) AcceptConn(conn Conn) {
 func (r *Router) handleConn(c Conn) {
 	r.mu.Lock()
 	r.conns = append(r.conns, c)
-	se := &Session{
-		routerIDGen: &r.idCounter,
+	rse := &RouterSession{
+		gen: &r.idCounter,
 	}
 	r.mu.Unlock()
+	cse := &ClientSession{}
 
 	for {
 		r.mu.RLock()
@@ -71,7 +72,8 @@ func (r *Router) handleConn(c Conn) {
 		}
 
 		ctx, cancel := context.WithTimeout(ctx, t)
-		ctx = NewSessionContext(ctx, se)
+		ctx = NewRouterContext(ctx, rse)
+		ctx = NewClientSessionContext(ctx, cse)
 		// TODO Check r.Handler, if nil use Default
 		// TODO How to handle client closing in a Handler, stopping the chain and continuing the chain
 		// -> Wrap the conn in a wrapper, stop: cancel ctx (stops chain execution), continue: pass ctx
