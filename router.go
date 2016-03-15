@@ -58,10 +58,15 @@ func (r *Router) handleConn(c Conn) {
 		t := r.timeout
 		ctx := r.ctx
 		r.mu.RUnlock()
-		msg, err := waitForMessage(ctx, c, t)
+		msg, err := c.Read(ctx)
 		if err != nil {
 			switch err {
 			case context.Canceled:
+				tctx, cancel := context.WithTimeout(context.Background(), t)
+				defer cancel()
+				c.Send(tctx, &Goodbye{GoodbyeCode, nil, SystemShutdown})
+				c.Close()
+				return
 			case context.DeadlineExceeded:
 				// TODO Tell client about the timeout
 				c.Close()
@@ -101,13 +106,6 @@ func (r *Router) Close() error {
 	case <-r.ctx.Done():
 		return r.ctx.Err()
 	default:
-		r.mu.RLock()
-		defer r.mu.RUnlock()
-		for i := range r.conns {
-			// TODO Collect errors
-			// TODO close in a timeout context and send GOODBYE/ABORT messages
-			r.conns[i].Close()
-		}
 		r.cancel()
 		return nil
 	}

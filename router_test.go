@@ -7,12 +7,6 @@ import (
 	"time"
 )
 
-var (
-	realms = []string{
-		"test", "turms", "0",
-	}
-)
-
 type logHandler struct {
 	logf func(format string, v ...interface{})
 }
@@ -27,25 +21,21 @@ func (h *logHandler) Handle(ctx context.Context, c Conn, msg Message) context.Co
 	return ctx
 }
 
-var (
-	router  *Router
-	verbose = true
-	once    sync.Once
+const timeout = time.Second
 
-	log = &logHandler{}
-)
+func newTimeoutContext() context.Context {
+	ctx, _ := context.WithTimeout(context.Background(), timeout)
+	return ctx
+}
 
-func startRouter() {
-	router = NewRouter()
-
+func setupRouter(t *testing.T) *Router {
+	// Setup router and middleware
+	log := &logHandler{logf: t.Logf}
+	router := NewRouter()
 	rh := NewRealm()
-	for _, name := range realms {
-		rh.CreateRealm(name)
-	}
 	broker := NewBroker()
 	dealer := NewDealer()
-
-	if verbose {
+	if testing.Verbose() {
 		router.Handler = &Chain{
 			log,
 			rh,
@@ -59,22 +49,25 @@ func startRouter() {
 			dealer,
 		}
 	}
-}
 
-const timeout = time.Second
-
-func newTimeoutContext() context.Context {
-	ctx, _ := context.WithTimeout(context.Background(), timeout)
-	return ctx
+	// Setup realms
+	realms := []string{
+		"TestRouterBasicProfile", "TestRouterMultipleClients",
+	}
+	for _, name := range realms {
+		err := rh.CreateRealm(name)
+		if err != nil {
+			t.Logf("%s", err)
+		}
+	}
+	return router
 }
 
 func TestRouterBasicProfile(t *testing.T) {
-	log = &logHandler{logf: t.Logf}
-	once.Do(startRouter)
-
+	router := setupRouter(t)
 	var err error
 	// Subscribe & Publish
-	realmName := URI(realms[0])
+	realmName := URI("TestRouterBasicProfile")
 	publisher := router.Client()
 	err = publisher.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Publisher: true})
 	if err != nil {
@@ -174,23 +167,25 @@ func TestRouterBasicProfile(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-
 	err = caller.Close()
+	if err != nil {
+		t.Error(err)
+	}
+	err = router.Close()
 	if err != nil {
 		t.Error(err)
 	}
 }
 
 func TestRouterMultipleClients(t *testing.T) {
-	log = &logHandler{logf: t.Logf}
-	once.Do(startRouter)
+	router := setupRouter(t)
 
 	numClients := 10
 	clients := make([]*Client, numClients)
 	for i := range clients {
 		clients[i] = router.Client()
 	}
-	realmName := URI(realms[1])
+	realmName := URI("TestRouterMultipleClients")
 	var wg sync.WaitGroup
 	for _, client := range clients {
 		wg.Add(1)
@@ -204,15 +199,9 @@ func TestRouterMultipleClients(t *testing.T) {
 	}
 	wg.Wait()
 
-	for _, client := range clients {
-		wg.Add(1)
-		go func(c *Client) {
-			err := c.Close()
-			if err != nil {
-				t.Error(err)
-			}
-			wg.Done()
-		}(client)
+	// Close router
+	err := router.Close()
+	if err != nil {
+		t.Error(err)
 	}
-	wg.Wait()
 }
