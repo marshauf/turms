@@ -42,23 +42,21 @@ func startRouter() {
 	for _, name := range realms {
 		rh.RegisterRealm(name)
 	}
+	broker := NewBroker()
+	dealer := NewDealer()
 
 	if verbose {
 		router.Handler = &Chain{
 			log,
 			rh,
-			&Chain{
-				NewBroker(),
-				NewDealer(),
-			},
+			broker,
+			dealer,
 		}
 	} else {
 		router.Handler = &Chain{
 			rh,
-			&Chain{
-				NewBroker(),
-				NewDealer(),
-			},
+			broker,
+			dealer,
 		}
 	}
 }
