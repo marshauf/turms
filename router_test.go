@@ -7,8 +7,10 @@ import (
 	"time"
 )
 
-const (
-	realmName = "test"
+var (
+	realms = []string{
+		"test", "turms", "0",
+	}
 )
 
 type logHandler struct {
@@ -18,7 +20,7 @@ type logHandler struct {
 func (h *logHandler) Handle(ctx context.Context, c Conn, msg Message) context.Context {
 	se, ok := ClientSessionFromContext(ctx)
 	if !ok {
-		h.logf("[DEBUG][UnknownSession]: %#v", msg)
+		h.logf("[DEBUG][Realm:n/a][Session:n/a]: %#v", msg)
 		return ctx
 	}
 	h.logf("[DEBUG][Realm:%s][Session:%d]: %#v", se.Realm(), se.ID(), msg)
@@ -35,10 +37,16 @@ var (
 
 func startRouter() {
 	router = NewRouter()
+
+	rh := NewRealm()
+	for _, name := range realms {
+		rh.RegisterRealm(name)
+	}
+
 	if verbose {
 		router.Handler = &Chain{
-			Realm(realmName),
 			log,
+			rh,
 			&Chain{
 				NewBroker(),
 				NewDealer(),
@@ -46,7 +54,7 @@ func startRouter() {
 		}
 	} else {
 		router.Handler = &Chain{
-			Realm(realmName),
+			rh,
 			&Chain{
 				NewBroker(),
 				NewDealer(),
@@ -68,6 +76,7 @@ func TestRouterBasicProfile(t *testing.T) {
 
 	var err error
 	// Subscribe & Publish
+	realmName := URI(realms[0])
 	publisher := router.Client()
 	err = publisher.JoinRealm(newTimeoutContext(), realmName, &ClientDetails{Publisher: true})
 	if err != nil {
@@ -183,6 +192,7 @@ func TestRouterMultipleClients(t *testing.T) {
 	for i := range clients {
 		clients[i] = router.Client()
 	}
+	realmName := URI(realms[1])
 	var wg sync.WaitGroup
 	for _, client := range clients {
 		wg.Add(1)

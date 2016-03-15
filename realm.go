@@ -16,6 +16,8 @@ var (
 	ErrRoleExist         = errors.New("role already exists")
 	ErrRoleNotExist      = errors.New("role does not exist")
 	ErrProtocolViolation = errors.New("protocol violation")
+	ErrRealmExist        = errors.New("realm already exists")
+	ErrRealmNoExist      = errors.New("realm doesn not exist")
 )
 
 type RouterSession struct {
@@ -97,28 +99,61 @@ func ErrorFromContext(ctx context.Context) (error, bool) {
 	return s, ok
 }
 
-type realm struct {
+type Realm struct {
 	name  URI
 	mu    sync.RWMutex
 	roles map[string]*role
+}
+
+func (r *Realm) Name() URI {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.name
+}
+
+func (r *Realm) Details() map[string]interface{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return map[string]interface{}{
+		"roles": r.roles,
+	}
+}
+
+type realmHandler struct {
+	realms map[URI]*Realm
 }
 
 type role struct {
 	features map[string]bool
 }
 
-// Realm returns a handler that handles realm specific messages.
-func Realm(name string) Handler {
-	realmName := URI(name)
-	if !realmName.Valid() {
-		panic("invalid realm name")
-	}
-	return &realm{
-		name: realmName,
+// NewRealm returns a realm handler that handles realm specific messages.
+func NewRealm() *realmHandler {
+	return &realmHandler{
+		realms: make(map[URI]*Realm),
 	}
 }
 
-func (r *realm) RegisterRole(name string) error {
+func (h *realmHandler) RegisterRealm(name string) error {
+	u := URI(name)
+	if !u.Valid() {
+		return ErrInvalidURI
+	}
+	if _, exist := h.realms[u]; exist {
+		return ErrRealmExist
+	}
+	h.realms[u] = &Realm{
+		name: u,
+	}
+	return nil
+}
+
+func (h *realmHandler) Realm(name string) (*Realm, bool) {
+	r, ok := h.realms[URI(name)]
+	return r, ok
+}
+
+func (r *Realm) RegisterRole(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, exist := r.roles[name]
@@ -129,7 +164,7 @@ func (r *realm) RegisterRole(name string) error {
 	return nil
 }
 
-func (r *realm) RegisterFeatures(name string, features ...string) error {
+func (r *Realm) RegisterFeatures(name string, features ...string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	rl, exist := r.roles[name]
@@ -151,12 +186,14 @@ func (r *realm) RegisterFeatures(name string, features ...string) error {
 }
 
 func handleProtocolViolation(ctx context.Context, conn Conn) error {
+	// TODO realmHandler should mark message as a protocol violation and another middleware should decide what to do with the protocol violation
+	// Check specs for a protocol violation documentation.
 	defer conn.Close()
 	byeMsg := &Goodbye{GoodbyeCode, map[string]interface{}{}, URI("wamp.error.protocol_violation")}
 	return conn.Send(ctx, byeMsg)
 }
 
-func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
+func (h *realmHandler) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
 	se, hasSession := ClientSessionFromContext(ctx)
 	if !hasSession {
 		panic("router did not provide a session variable in the context")
@@ -167,28 +204,33 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 		// Check if the session is already established with a realm
 		if len(se.Realm()) != 0 {
 			handleProtocolViolation(ctx, conn)
-			ctx, cancel := context.WithCancel(ctx)
-			cancel()
 			return NewErrorContext(ctx, ErrProtocolViolation)
+		}
+
+		r, exist := h.realms[m.Realm]
+		if !exist {
+			msg := &Abort{AbortCode, nil, NoSuchRealm}
+			if err := conn.Send(ctx, msg); err != nil {
+				return NewErrorContext(ctx, err)
+			}
+			return NewErrorContext(ctx, ErrRealmNoExist)
 		}
 
 		// assign session to this  realm
 		se.id = NewGlobalID()
-		se.realm = r.name
+		se.realm = r.Name()
 		se.details = m.Details
 
-		welcomeMsg := &Welcome{WelcomeCode, se.ID(), r.details()}
+		welcomeMsg := &Welcome{WelcomeCode, se.ID(), r.Details()}
 		err := conn.Send(ctx, welcomeMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
 		}
 		return ctx
 	case *Abort:
-		conn.Close()
-		ctx, cancel := context.WithCancel(ctx)
-		cancel()
 		return ctx
 	case *Goodbye:
+		// TODO when receiving a Goodbye message mark session in closing process
 		if m.Reason != GoodbyeAndOut {
 			// Reply with goodbye if received message is not a goodbye message
 			byeMsg := &Goodbye{GoodbyeCode, map[string]interface{}{}, GoodbyeAndOut}
@@ -200,18 +242,7 @@ func (r *realm) Handle(ctx context.Context, conn Conn, msg Message) context.Cont
 		se.id = 0
 		se.realm = URI("")
 		se.details = nil
-
-		ctx, cancel := context.WithCancel(ctx)
-		cancel()
 		return ctx
 	}
 	return ctx
-}
-
-func (r *realm) details() map[string]interface{} {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return map[string]interface{}{
-		"roles": r.roles,
-	}
 }

@@ -1,8 +1,11 @@
 package turms
 
 import (
+	"errors"
 	"unicode"
 )
+
+var ErrInvalidURI = errors.New("invalid uri")
 
 type URI string
 
