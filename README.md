@@ -1,7 +1,6 @@
 # turms
 
-[![Build Status](https://travis-ci.org/marshauf/turms.svg)](https://travis-ci.org/marshauf/turms) [![Coverage Status](https://coveralls.io/repos/github/marshauf/turms/badge.svg?branch=master)](https://coveralls.io/github/marshauf/turms?branch=master) 
-[![GoDoc](https://godoc.org/github.com/marshauf/turms?status.svg)](https://godoc.org/github.com/marshauf/turms)
+[![Build Status](https://travis-ci.org/marshauf/turms.svg)](https://travis-ci.org/marshauf/turms) [![Coverage Status](https://coveralls.io/repos/github/marshauf/turms/badge.svg?branch=master)](https://coveralls.io/github/marshauf/turms?branch=master) [![Go Report Card](https://goreportcard.com/badge/github.com/marshauf/turms)](https://goreportcard.com/report/github.com/marshauf/turms) [![GoDoc](https://godoc.org/github.com/marshauf/turms?status.svg)](https://godoc.org/github.com/marshauf/turms)
 
 The Go implementation of WAMP (Web Application Messaging Protocol) v2.
 
