@@ -29,7 +29,8 @@ func (s *RouterSession) RouterID() ID {
 }
 
 type RealmSession struct {
-	mu sync.RWMutex
+	realm *Realm
+	mu    sync.RWMutex
 }
 
 // ClientSession stores the values and optional configuration for a client session.
@@ -103,6 +104,7 @@ type Realm struct {
 	name  URI
 	mu    sync.RWMutex
 	roles map[string]*role
+	conns map[ID]Conn
 }
 
 func (r *Realm) Name() URI {
@@ -120,6 +122,7 @@ func (r *Realm) Details() map[string]interface{} {
 }
 
 type realmHandler struct {
+	mu     sync.RWMutex
 	realms map[URI]*Realm
 }
 
@@ -134,7 +137,7 @@ func NewRealm() *realmHandler {
 	}
 }
 
-func (h *realmHandler) RegisterRealm(name string) error {
+func (h *realmHandler) CreateRealm(name string) error {
 	u := URI(name)
 	if !u.Valid() {
 		return ErrInvalidURI
@@ -143,14 +146,28 @@ func (h *realmHandler) RegisterRealm(name string) error {
 		return ErrRealmExist
 	}
 	h.realms[u] = &Realm{
-		name: u,
+		name:  u,
+		conns: make(map[ID]Conn),
 	}
 	return nil
 }
 
+func (h *realmHandler) CloseRealm(name string) error {
+	u := URI(name)
+	if !u.Valid() {
+		return ErrInvalidURI
+	}
+	if _, exist := h.realms[u]; !exist {
+		return ErrRealmNoExist
+	}
+	delete(h.realms, u)
+	return nil
+}
+
 func (h *realmHandler) Realm(name string) (*Realm, bool) {
-	r, ok := h.realms[URI(name)]
-	return r, ok
+	u := URI(name)
+	r, exist := h.realms[u]
+	return r, exist
 }
 
 func (r *Realm) RegisterRole(name string) error {
@@ -202,12 +219,14 @@ func (h *realmHandler) Handle(ctx context.Context, conn Conn, msg Message) conte
 	switch m := msg.(type) {
 	case *Hello:
 		// Check if the session is already established with a realm
-		if len(se.Realm()) != 0 {
+		if len(se.realm) != 0 {
 			handleProtocolViolation(ctx, conn)
 			return NewErrorContext(ctx, ErrProtocolViolation)
 		}
 
+		h.mu.RLock()
 		r, exist := h.realms[m.Realm]
+		h.mu.RUnlock()
 		if !exist {
 			msg := &Abort{AbortCode, nil, NoSuchRealm}
 			if err := conn.Send(ctx, msg); err != nil {
@@ -216,18 +235,36 @@ func (h *realmHandler) Handle(ctx context.Context, conn Conn, msg Message) conte
 			return NewErrorContext(ctx, ErrRealmNoExist)
 		}
 
-		// assign session to this  realm
-		se.id = NewGlobalID()
-		se.realm = r.Name()
-		se.details = m.Details
+		id := NewGlobalID()
+		name := r.Name()
 
-		welcomeMsg := &Welcome{WelcomeCode, se.ID(), r.Details()}
+		welcomeMsg := &Welcome{WelcomeCode, id, r.Details()}
 		err := conn.Send(ctx, welcomeMsg)
 		if err != nil {
 			return NewErrorContext(ctx, err)
 		}
+		// assign session to this  realm
+		se.id = id
+		se.realm = name
+		se.details = m.Details
+		r.mu.Lock()
+		r.conns[id] = conn
+		r.mu.Unlock()
 		return ctx
 	case *Abort:
+		if len(se.realm) != 0 {
+			h.mu.RLock()
+			r, exist := h.realms[se.realm]
+			h.mu.RUnlock()
+			if exist {
+				r.mu.Lock()
+				delete(r.conns, se.id)
+				r.mu.Unlock()
+			}
+		}
+		se.id = 0
+		se.realm = URI("")
+		se.details = nil
 		return ctx
 	case *Goodbye:
 		// TODO when receiving a Goodbye message mark session in closing process
@@ -238,6 +275,14 @@ func (h *realmHandler) Handle(ctx context.Context, conn Conn, msg Message) conte
 			if err != nil {
 				ctx = NewErrorContext(ctx, err)
 			}
+		}
+		h.mu.RLock()
+		r, exist := h.realms[se.realm]
+		h.mu.RUnlock()
+		if exist {
+			r.mu.Lock()
+			delete(r.conns, se.id)
+			r.mu.Unlock()
 		}
 		se.id = 0
 		se.realm = URI("")

@@ -40,7 +40,7 @@ func startRouter() {
 
 	rh := NewRealm()
 	for _, name := range realms {
-		rh.RegisterRealm(name)
+		rh.CreateRealm(name)
 	}
 	broker := NewBroker()
 	dealer := NewDealer()
