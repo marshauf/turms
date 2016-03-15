@@ -7,13 +7,16 @@ go:
   - tip
 
 install:
+  - go get -u golang.org/x/tools/cmd/cover
+  - go get -u github.com/mattn/goveralls
   - go get golang.org/x/net/context
   - go get github.com/gorilla/websocket
   - go get github.com/ugorji/go/codec
 
 script:
-  - go test -v ./...
   - go test -v -race ./...
+  - go test -coverprofile=profile.cov
+  - $HOME/gopath/bin/goveralls -coverprofile=profile.cov -service=travis-ci
 
 matrix:
   allow_failures:
