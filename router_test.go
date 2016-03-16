@@ -12,7 +12,7 @@ type logHandler struct {
 }
 
 func (h *logHandler) Handle(ctx context.Context, c Conn, msg Message) context.Context {
-	se, ok := ClientSessionFromContext(ctx)
+	se, ok := SessionFromContext(ctx)
 	if !ok {
 		h.logf("[DEBUG][Realm:n/a][Session:n/a]: %#v", msg)
 		return ctx

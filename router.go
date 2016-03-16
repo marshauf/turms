@@ -6,6 +6,46 @@ import (
 	"time"
 )
 
+const (
+	sessionContextKey = "session"
+)
+
+type Session struct {
+	id           ID
+	realm        *Realm
+	details      map[string]interface{}
+	sessionIDGen idCounter
+
+	routerIDGen *idCounter
+}
+
+func (s *Session) ID() ID {
+	return s.id
+}
+
+func (s *Session) Realm() *Realm {
+	return s.realm
+}
+
+func (s *Session) SessionID() ID {
+	return s.sessionIDGen.Next()
+}
+
+func (s *Session) RouterID() ID {
+	return s.routerIDGen.Next()
+}
+
+// NewSessionContext returns a child context with the session value stored in it.
+func NewSessionContext(ctx context.Context, session *Session) context.Context {
+	return context.WithValue(ctx, sessionContextKey, session)
+}
+
+// SessionFromContext extracts the session value from the context.
+func SessionFromContext(ctx context.Context) (*Session, bool) {
+	s, ok := ctx.Value(sessionContextKey).(*Session)
+	return s, ok
+}
+
 // A Router performs message routing between components
 // and may handle either or both the roles of Dealer or Broker.
 type Router struct {
@@ -47,11 +87,10 @@ func (r *Router) AcceptConn(conn Conn) {
 func (r *Router) handleConn(c Conn) {
 	r.mu.Lock()
 	r.conns = append(r.conns, c)
-	rse := &RouterSession{
-		gen: &r.idCounter,
+	se := &Session{
+		routerIDGen: &r.idCounter,
 	}
 	r.mu.Unlock()
-	cse := &ClientSession{}
 
 	for {
 		r.mu.RLock()
@@ -77,8 +116,7 @@ func (r *Router) handleConn(c Conn) {
 		}
 
 		ctx, cancel := context.WithTimeout(ctx, t)
-		ctx = NewRouterContext(ctx, rse)
-		ctx = NewClientSessionContext(ctx, cse)
+		ctx = NewSessionContext(ctx, se)
 		// TODO Check r.Handler, if nil use Default
 		// TODO How to handle client closing in a Handler, stopping the chain and continuing the chain
 		// -> Wrap the conn in a wrapper, stop: cancel ctx (stops chain execution), continue: pass ctx

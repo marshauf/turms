@@ -26,7 +26,7 @@ type broker struct {
 }
 
 type Broker interface {
-	Subscribe(ctx context.Context, topic URI, clientSe *ClientSession, routerSe *RouterSession, conn Conn) *Subscription
+	Subscribe(ctx context.Context, topic URI, se *Session, conn Conn) *Subscription
 	Unsubscribe(ctx context.Context, subscription ID, session ID) error
 	Publish(ctx context.Context, topic URI, details map[string]interface{}, args []interface{}, argsKW map[string]interface{}) error
 	Subscriptions(ctx context.Context, topic URI) []*Subscription
@@ -42,8 +42,8 @@ func NewBroker() *broker {
 	}
 }
 
-func (b *broker) Subscribe(ctx context.Context, topic URI, clientSe *ClientSession, routerSe *RouterSession, conn Conn) *Subscription {
-	return b.subscribe(topic, clientSe.ID(), routerSe.gen, conn)
+func (b *broker) Subscribe(ctx context.Context, topic URI, se *Session, conn Conn) *Subscription {
+	return b.subscribe(topic, se.ID(), se.routerIDGen, conn)
 }
 
 func (b *broker) Unsubscribe(ctx context.Context, subscription ID, session ID) error {
@@ -124,18 +124,14 @@ func (b *broker) unsubscribe(subscriptionID ID, sessionID ID) error {
 
 // Handle processes incoming Broker related messages and may communicated back with the connection in the provided context.
 func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
-	se, hasSession := ClientSessionFromContext(ctx)
-	if !hasSession {
-		return NewErrorContext(ctx, ErrNoSession)
-	}
-	rse, hasSession := RouterSessionFromContext(ctx)
+	se, hasSession := SessionFromContext(ctx)
 	if !hasSession {
 		return NewErrorContext(ctx, ErrNoSession)
 	}
 
 	switch m := msg.(type) {
 	case *Subscribe:
-		sub := b.subscribe(m.Topic, se.ID(), rse.gen, conn)
+		sub := b.subscribe(m.Topic, se.ID(), se.routerIDGen, conn)
 		subscribedMsg := &Subscribed{SubscribedCode, m.Request, sub.id}
 		err := conn.Send(ctx, subscribedMsg)
 		if err != nil {
