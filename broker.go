@@ -18,108 +18,104 @@ type Subscription struct {
 	subscriber Conn
 }
 
-type broker struct {
-	subscriptions map[ID]*Subscription
-	topics        map[URI][]*Subscription
+type broker struct{}
 
-	mu sync.RWMutex
-}
-
-type Broker interface {
-	Subscribe(ctx context.Context, topic URI, se *Session, conn Conn) *Subscription
-	Unsubscribe(ctx context.Context, subscription ID, session ID) error
-	Publish(ctx context.Context, topic URI, details map[string]interface{}, args []interface{}, argsKW map[string]interface{}) error
-	Subscriptions(ctx context.Context, topic URI) []*Subscription
-}
-
-// NewBroker returns a handler that handles messages by routing incoming events
+// Broker returns a handler that handles messages by routing incoming events
 // from Publishers to Subscribers that are subscribed to respective topics.
 // Requires a Realm handler chained before the Broker.
-func NewBroker() *broker {
-	return &broker{
-		subscriptions: make(map[ID]*Subscription),
-		topics:        make(map[URI][]*Subscription),
-	}
+func Broker() *broker {
+	return &broker{}
 }
 
-func (b *broker) Subscribe(ctx context.Context, topic URI, se *Session, conn Conn) *Subscription {
-	return b.subscribe(topic, se.ID(), se.routerIDGen, conn)
+type brokerStore struct {
+	subscriptions map[ID]*Subscription
+	topics        map[URI][]*Subscription
+	mu            sync.RWMutex
 }
 
-func (b *broker) Unsubscribe(ctx context.Context, subscription ID, session ID) error {
-	return b.unsubscribe(subscription, session)
-}
+const (
+	brokerStoreKey = "broker"
+)
 
-func (b *broker) Publish(ctx context.Context, topic URI, details map[string]interface{}, args []interface{}, argsKW map[string]interface{}) error {
-	subs := b.Subscriptions(ctx, topic)
-	publicationID := NewGlobalID()
-	for _, sub := range subs {
-		event := &Event{EventCode,
-			sub.id, publicationID, details, args, argsKW,
+func getBrokerStore(r *Realm) *brokerStore {
+	var store *brokerStore
+	v, ok := r.Value(brokerStoreKey)
+	if !ok {
+		store = &brokerStore{
+			subscriptions: make(map[ID]*Subscription),
+			topics:        make(map[URI][]*Subscription),
 		}
-		err := sub.subscriber.Send(ctx, event)
-		if err != nil {
-			return err
-		}
+		r.SetValue(brokerStoreKey, store)
+	} else {
+		store = v.(*brokerStore)
 	}
-	return nil
+	return store
 }
 
-func (b *broker) Subscriptions(ctx context.Context, topic URI) []*Subscription {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	if subs, ok := b.topics[topic]; ok {
-		return subs
-	}
-	return []*Subscription{}
-}
-
-func (b *broker) subscribe(topic URI, sessionID ID, idC *idCounter, conn Conn) *Subscription {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	subscriptionID := idC.Next()
+func subscribe(se *Session, conn Conn, req *Subscribe) *Subscription {
+	r := se.Realm()
+	store := getBrokerStore(r)
 	sub := &Subscription{
-		id:         subscriptionID,
-		topic:      topic,
-		sessionID:  sessionID,
+		id:         se.RouterID(),
+		topic:      req.Topic,
+		sessionID:  se.ID(),
 		subscriber: conn,
 	}
 
-	t, ok := b.topics[topic]
+	t, ok := store.topics[sub.topic]
 	if !ok {
-		b.topics[topic] = []*Subscription{sub}
+		store.topics[sub.topic] = []*Subscription{sub}
 		return sub
 	}
-	b.topics[topic] = append(t, sub)
-	b.subscriptions[subscriptionID] = sub
+	store.topics[sub.topic] = append(t, sub)
+	store.subscriptions[sub.id] = sub
 	return sub
 }
 
-func (b *broker) unsubscribe(subscriptionID ID, sessionID ID) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func unsubscribe(se *Session, subID ID) error {
+	r := se.Realm()
+	store := getBrokerStore(r)
 
-	sub, ok := b.subscriptions[subscriptionID]
+	sub, ok := store.subscriptions[subID]
 	if !ok {
 		return &NoSuchSubscription
 	}
-	delete(b.subscriptions, subscriptionID)
+	delete(store.subscriptions, subID)
 
-	subs, ok := b.topics[sub.topic]
-	if !ok || subs == nil {
-		// This should not happen
-		return nil
-	}
+	subs := store.topics[sub.topic]
 	for i, s := range subs {
-		if s.id == subscriptionID {
+		if s.id == subID {
 			// Delete element
-			b.topics[sub.topic], subs[len(subs)-1] = append(subs[:i], subs[i+1:]...), nil
+			store.topics[sub.topic], subs[len(subs)-1] = append(subs[:i], subs[i+1:]...), nil
 			return nil
 		}
 	}
-	// This should not happen
-	return nil
+	panic("unreachable")
+}
+
+func publish(ctx context.Context, se *Session, req *Publish) ID {
+	publicationID := NewGlobalID()
+	r := se.Realm()
+	store := getBrokerStore(r)
+	subs, ok := store.topics[req.Topic]
+	if !ok {
+		return publicationID
+	}
+	publisherID := se.ID()
+	wg := sync.WaitGroup{}
+	for _, sub := range subs {
+		// Don't send a published event to the pubisher itself
+		if publisherID == sub.sessionID {
+			continue
+		}
+		wg.Add(1)
+		go func(subscriber Conn, event *Event) {
+			subscriber.Send(ctx, event)
+			wg.Done()
+		}(sub.subscriber, &Event{EventCode, sub.id, publicationID, map[string]interface{}{}, req.Args, req.ArgsKW})
+	}
+	wg.Wait()
+	return publicationID
 }
 
 // Handle processes incoming Broker related messages and may communicated back with the connection in the provided context.
@@ -131,7 +127,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 
 	switch m := msg.(type) {
 	case *Subscribe:
-		sub := b.subscribe(m.Topic, se.ID(), se.routerIDGen, conn)
+		sub := subscribe(se, conn, m)
 		subscribedMsg := &Subscribed{SubscribedCode, m.Request, sub.id}
 		err := conn.Send(ctx, subscribedMsg)
 		if err != nil {
@@ -139,7 +135,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		}
 		return ctx
 	case *Unsubscribe:
-		err := b.unsubscribe(m.Subscription, se.ID())
+		err := unsubscribe(se, m.Subscription)
 		if err != nil {
 			errMsg := &Error{ErrorCode,
 				UnsubscribeCode, m.Request, map[string]interface{}{}, "wamp.error.no_such_subscription", nil, nil,
@@ -158,22 +154,7 @@ func (b *broker) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 		}
 		return ctx
 	case *Publish:
-		subscriptions := b.Subscriptions(ctx, m.Topic)
-
-		publicationID := NewGlobalID()
-		for _, sub := range subscriptions {
-			// Don't send a published event to the pubisher itself
-			if se.ID() == sub.sessionID {
-				continue
-			}
-			eventMsg := &Event{EventCode,
-				sub.id, publicationID, map[string]interface{}{}, m.Args, m.ArgsKW,
-			}
-			if err := sub.subscriber.Send(ctx, eventMsg); err != nil {
-				// TODO depending on error drop subscriber
-			}
-		}
-
+		publicationID := publish(ctx, se, m)
 		if acknowledgeVal, ok := m.Options["acknowledge"]; ok {
 			if acknowledge, ok := acknowledgeVal.(bool); ok && acknowledge {
 				acknowledgeMsg := &Published{PublishedCode, m.Request, publicationID}

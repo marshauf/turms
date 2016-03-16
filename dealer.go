@@ -31,16 +31,6 @@ type RegistrationDetails struct {
 	InvocationPolicy string
 }
 
-type Dealer interface {
-	Register(ctx context.Context, procedure URI, se *Session, conn Conn) (ID, error)
-	Unregister(ctx context.Context, procedure ID, session ID) error
-
-	Registrations(ctx context.Context) (exact []ID, prefix []ID, wildcard []ID)
-	Registration(ctx context.Context, procedure URI, options map[string]interface{}) (registration ID, exists bool)
-	RegistrationDetails(ctx context.Context, registration ID) (*RegistrationDetails, error)
-	Callees(ctx context.Context, registration ID) ([]ID, error)
-}
-
 type calleeReg struct {
 	session ID
 	conn    Conn
@@ -51,7 +41,17 @@ type registration struct {
 	Details *RegistrationDetails
 }
 
-type dealer struct {
+type dealer struct{}
+
+// Dealer returns a handler that handles messages by routing calls
+// from incoming Callers to Callees implementing the procedure called,
+// and route call results back from Callees to Callers.
+// Requires a Realm handler chained before the Dealer.
+func Dealer() *dealer {
+	return &dealer{}
+}
+
+type dealerStore struct {
 	registrations map[ID]*registration
 	procedures    map[URI]ID
 	calls         map[ID]ID
@@ -59,87 +59,43 @@ type dealer struct {
 	mu            sync.RWMutex
 }
 
-// NewDealer returns a handler that handles messages by routing calls
-// from incoming Callers to Callees implementing the procedure called,
-// and route call results back from Callees to Callers.
-// Requires a Realm handler chained before the Dealer.
-func NewDealer() *dealer {
-	return &dealer{
-		registrations: make(map[ID]*registration),
-		procedures:    make(map[URI]ID),
-		calls:         make(map[ID]ID),
-		invocations:   make(map[ID]Conn),
+const (
+	dealerStoreKey = "dealer"
+)
+
+func getDealerStore(r *Realm) *dealerStore {
+	var store *dealerStore
+	v, ok := r.Value(dealerStoreKey)
+	if !ok {
+		store = &dealerStore{
+			registrations: make(map[ID]*registration),
+			procedures:    make(map[URI]ID),
+			calls:         make(map[ID]ID),
+			invocations:   make(map[ID]Conn),
+		}
+		r.SetValue(dealerStoreKey, store)
+	} else {
+		store = v.(*dealerStore)
 	}
+	return store
 }
 
-func (d *dealer) Register(ctx context.Context, procedure URI, se *Session, conn Conn) (ID, error) {
-	return d.register(procedure, se.ID(), se.routerIDGen, conn)
-}
+func register(se *Session, conn Conn, req *Register) (ID, error) {
+	r := se.Realm()
+	store := getDealerStore(r)
 
-func (d *dealer) Unregister(ctx context.Context, procedure ID, session ID) error {
-	return d.unregister(procedure, session)
-}
-
-// Registrations returns all registered procedures.
-func (d *dealer) Registrations(ctx context.Context) (exact []ID, prefix []ID, wildcard []ID) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	exact = make([]ID, len(d.registrations))
-	prefix = []ID{}   // Not yet implemented
-	wildcard = []ID{} // Not yet implemented
-	i := 0
-	for id := range d.registrations {
-		exact[i] = id
-		i++
-	}
-	return
-}
-
-func (d *dealer) Registration(ctx context.Context, procedure URI, options map[string]interface{}) (registration ID, exists bool) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	registration, exists = d.procedures[procedure]
-	return
-}
-
-func (d *dealer) RegistrationDetails(ctx context.Context, registration ID) (*RegistrationDetails, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	// TODO fill details
-	details := &RegistrationDetails{
-		ID: registration,
-	}
-	return details, nil
-}
-
-func (d *dealer) Callees(ctx context.Context, registration ID) ([]ID, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	callees := d.registrations[registration].Callees
-	ids := make([]ID, len(callees))
-	i := 0
-	for _, c := range callees {
-		ids[i] = c.session
-		i++
-	}
-	return ids, nil
-}
-
-func (d *dealer) register(procedure URI, sessionID ID, idC *idCounter, conn Conn) (ID, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	registrationID, exist := d.procedures[procedure]
+	registrationID, exist := store.procedures[req.Procedure]
 	if exist {
 		return 0, &ProcedureAlreadyExists
 	}
-	registrationID = idC.Next()
-	d.procedures[procedure] = registrationID
-	d.registrations[registrationID] = &registration{
-		Callees: []*calleeReg{&calleeReg{sessionID, conn}},
+	registrationID = se.RouterID()
+	store.procedures[req.Procedure] = registrationID
+	store.registrations[registrationID] = &registration{
+		Callees: []*calleeReg{&calleeReg{se.ID(), conn}},
 		Details: &RegistrationDetails{
 			ID:               registrationID,
 			Created:          time.Now(),
-			Procedure:        procedure,
+			Procedure:        req.Procedure,
 			MatchPolicy:      "",
 			InvocationPolicy: "",
 		},
@@ -147,17 +103,18 @@ func (d *dealer) register(procedure URI, sessionID ID, idC *idCounter, conn Conn
 	return registrationID, nil
 }
 
-func (d *dealer) unregister(registrationID ID, sessionID ID) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	reg, exist := d.registrations[registrationID]
+func unregister(se *Session, req *Unregister) error {
+	r := se.Realm()
+	store := getDealerStore(r)
+
+	reg, exist := store.registrations[req.Registration]
 	if !exist {
 		return &NoSuchProcedure
 	}
 
 	valid := false
 	for _, c := range reg.Callees {
-		if c.session == sessionID {
+		if c.session == se.ID() {
 			valid = true
 			break
 		}
@@ -166,27 +123,84 @@ func (d *dealer) unregister(registrationID ID, sessionID ID) error {
 		return &NotAuthorized
 	}
 
-	delete(d.registrations, registrationID)
+	delete(store.registrations, req.Registration)
 
-	for name, id := range d.procedures {
-		if id == registrationID {
-			delete(d.procedures, name)
+	for name, id := range store.procedures {
+		if id == req.Registration {
+			delete(store.procedures, name)
 			return nil
 		}
 	}
-	return nil
+	panic("unreachable")
 }
 
-func (d *dealer) getEndpoint(procedureURI URI) (Conn, ID, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	procedureID, exist := d.procedures[procedureURI]
+func getEndpoint(se *Session, procedure URI) (Conn, ID, error) {
+	r := se.Realm()
+	store := getDealerStore(r)
+	procedureID, exist := store.procedures[procedure]
 	if !exist {
 		return nil, 0, &NoSuchProcedure
 	}
-	reg := d.registrations[procedureID]
+	reg := store.registrations[procedureID]
 	callee := reg.Callees[0]
 	return callee.conn, procedureID, nil
+}
+
+func call(ctx context.Context, se *Session, conn Conn, req *Call) error {
+	r := se.Realm()
+	store := getDealerStore(r)
+	procedureID, exist := store.procedures[req.Procedure]
+	if !exist {
+		errMsg := &Error{ErrorCode, CallCode, req.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
+		return conn.Send(ctx, errMsg)
+	}
+	reg := store.registrations[procedureID]
+	callee := reg.Callees[0]
+
+	invocationReqID := se.SessionID()
+	store.invocations[invocationReqID] = conn
+	store.calls[invocationReqID] = req.Request
+	invocationMsg := &Invocation{InvocationCode, invocationReqID, procedureID, map[string]interface{}{}, req.Args, req.ArgsKW}
+	err := callee.conn.Send(ctx, invocationMsg)
+	if err != nil {
+		// TODO handle err
+		// TODO drop endpoint depending on the error
+		// TODO Send error message to caller
+		delete(store.invocations, invocationReqID)
+		delete(store.calls, invocationReqID)
+	}
+	return err
+}
+
+func yield(ctx context.Context, se *Session, req *Yield) error {
+	r := se.Realm()
+	store := getDealerStore(r)
+	caller, hasCaller := store.invocations[req.Request]
+	if !hasCaller {
+		return ErrNoCaller
+	}
+	callReqID, hasCallID := store.calls[req.Request]
+	if !hasCallID {
+		return ErrNoCall
+	}
+	details := map[string]interface{}{}
+	resMsg := &Result{ResultCode, callReqID, details, req.Args, req.ArgsKW}
+	return caller.Send(ctx, resMsg)
+}
+
+func invocationError(ctx context.Context, se *Session, req *Error) error {
+	r := se.Realm()
+	store := getDealerStore(r)
+	caller, hasCaller := store.invocations[req.Request]
+	if !hasCaller {
+		return ErrNoCaller
+	}
+	callReqID, hasCallID := store.calls[req.Request]
+	if !hasCallID {
+		return ErrNoCall
+	}
+	respMsg := &Error{ErrorCode, CallCode, callReqID, req.Details, req.Error, req.Args, req.ArgsKW}
+	return caller.Send(ctx, respMsg)
 }
 
 func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Context {
@@ -197,7 +211,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 
 	switch m := msg.(type) {
 	case *Register:
-		registrationID, err := d.register(m.Procedure, se.ID(), se.routerIDGen, conn)
+		registrationID, err := register(se, conn, m)
 		if err != nil {
 			errMsg := &Error{ErrorCode, RegisterCode, m.Request, map[string]interface{}{}, URI("wamp.error.procedure_already_exists"), nil, nil}
 			err = conn.Send(ctx, errMsg)
@@ -212,7 +226,7 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, err)
 		}
 	case *Unregister:
-		err := d.unregister(m.Registration, se.ID())
+		err := unregister(se, m)
 		if err != nil {
 			errMsg := &Error{ErrorCode, UnregisterCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
 			if err == &NotAuthorized {
@@ -230,61 +244,19 @@ func (d *dealer) Handle(ctx context.Context, conn Conn, msg Message) context.Con
 			return NewErrorContext(ctx, err)
 		}
 	case *Call:
-		endpoint, procedureID, err := d.getEndpoint(m.Procedure)
-		if err != nil {
-			errMsg := &Error{ErrorCode, CallCode, m.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
-			err = conn.Send(ctx, errMsg)
-			if err != nil {
-				return NewErrorContext(ctx, err)
-			}
-			return NewErrorContext(ctx, err)
-		}
-		invocationReqID := se.SessionID()
-		d.invocations[invocationReqID] = conn
-		d.calls[invocationReqID] = m.Request
-		invocationMsg := &Invocation{InvocationCode, invocationReqID, procedureID, map[string]interface{}{}, m.Args, m.ArgsKW}
-		err = endpoint.Send(ctx, invocationMsg)
-		if err != nil {
-			// TODO handle err
-			// TODO drop endpoint depending on the error
-			// TODO Send error message to caller
-			delete(d.invocations, invocationReqID)
-			delete(d.calls, invocationReqID)
+		if err := call(ctx, se, conn, m); err != nil {
 			return NewErrorContext(ctx, err)
 		}
 	case *Yield:
-		caller, hasCaller := d.invocations[m.Request]
-		if !hasCaller {
-			return NewErrorContext(ctx, ErrNoCaller)
-
-		}
-
-		callReqID, hasCallID := d.calls[m.Request]
-		if !hasCallID {
-			return NewErrorContext(ctx, ErrNoCall)
-		}
-		details := map[string]interface{}{}
-		resMsg := &Result{ResultCode, callReqID, details, m.Args, m.ArgsKW}
-		err := caller.Send(ctx, resMsg)
-		if err != nil {
+		if err := yield(ctx, se, m); err != nil {
 			return NewErrorContext(ctx, err)
 		}
 	case *Error:
+		// Only handle Invocation errors
 		if m.ErrCode != InvocationCode {
 			return ctx
 		}
-		caller, hasCaller := d.invocations[m.Request]
-		if !hasCaller {
-			return NewErrorContext(ctx, ErrNoCaller)
-		}
-
-		callReqID, hasCallID := d.calls[m.Request]
-		if !hasCallID {
-			return NewErrorContext(ctx, ErrNoCall)
-		}
-		respMsg := &Error{ErrorCode, CallCode, callReqID, m.Details, m.Error, m.Args, m.ArgsKW}
-		err := caller.Send(ctx, respMsg)
-		if err != nil {
+		if err := invocationError(ctx, se, m); err != nil {
 			return NewErrorContext(ctx, err)
 		}
 	}

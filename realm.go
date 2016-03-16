@@ -91,8 +91,9 @@ func (h *realmHandler) CreateRealm(name string) error {
 		return ErrRealmExist
 	}
 	h.realms[u] = &Realm{
-		name:  u,
-		conns: make(map[ID]Conn),
+		name:   u,
+		conns:  make(map[ID]Conn),
+		values: make(map[interface{}]interface{}),
 	}
 	return nil
 }

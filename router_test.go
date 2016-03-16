@@ -33,8 +33,8 @@ func setupRouter(t *testing.T) *Router {
 	log := &logHandler{logf: t.Logf}
 	router := NewRouter()
 	rh := NewRealm()
-	broker := NewBroker()
-	dealer := NewDealer()
+	broker := Broker()
+	dealer := Dealer()
 	if testing.Verbose() {
 		router.Handler = &Chain{
 			log,
