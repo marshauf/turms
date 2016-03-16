@@ -61,7 +61,8 @@ func subscribe(se *Session, conn Conn, req *Subscribe) *Subscription {
 		sessionID:  se.ID(),
 		subscriber: conn,
 	}
-
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	t, ok := store.topics[sub.topic]
 	if !ok {
 		store.topics[sub.topic] = []*Subscription{sub}
@@ -75,13 +76,13 @@ func subscribe(se *Session, conn Conn, req *Subscribe) *Subscription {
 func unsubscribe(se *Session, subID ID) error {
 	r := se.Realm()
 	store := getBrokerStore(r)
-
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	sub, ok := store.subscriptions[subID]
 	if !ok {
 		return &NoSuchSubscription
 	}
 	delete(store.subscriptions, subID)
-
 	subs := store.topics[sub.topic]
 	for i, s := range subs {
 		if s.id == subID {
@@ -97,6 +98,8 @@ func publish(ctx context.Context, se *Session, req *Publish) ID {
 	publicationID := NewGlobalID()
 	r := se.Realm()
 	store := getBrokerStore(r)
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	subs, ok := store.topics[req.Topic]
 	if !ok {
 		return publicationID

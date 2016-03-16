@@ -83,7 +83,8 @@ func getDealerStore(r *Realm) *dealerStore {
 func register(se *Session, conn Conn, req *Register) (ID, error) {
 	r := se.Realm()
 	store := getDealerStore(r)
-
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	registrationID, exist := store.procedures[req.Procedure]
 	if exist {
 		return 0, &ProcedureAlreadyExists
@@ -106,7 +107,8 @@ func register(se *Session, conn Conn, req *Register) (ID, error) {
 func unregister(se *Session, req *Unregister) error {
 	r := se.Realm()
 	store := getDealerStore(r)
-
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	reg, exist := store.registrations[req.Registration]
 	if !exist {
 		return &NoSuchProcedure
@@ -137,6 +139,8 @@ func unregister(se *Session, req *Unregister) error {
 func getEndpoint(se *Session, procedure URI) (Conn, ID, error) {
 	r := se.Realm()
 	store := getDealerStore(r)
+	store.mu.RLock()
+	defer store.mu.RUnlock()
 	procedureID, exist := store.procedures[procedure]
 	if !exist {
 		return nil, 0, &NoSuchProcedure
@@ -149,6 +153,8 @@ func getEndpoint(se *Session, procedure URI) (Conn, ID, error) {
 func call(ctx context.Context, se *Session, conn Conn, req *Call) error {
 	r := se.Realm()
 	store := getDealerStore(r)
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	procedureID, exist := store.procedures[req.Procedure]
 	if !exist {
 		errMsg := &Error{ErrorCode, CallCode, req.Request, map[string]interface{}{}, NoSuchRegistration, nil, nil}
@@ -175,6 +181,8 @@ func call(ctx context.Context, se *Session, conn Conn, req *Call) error {
 func yield(ctx context.Context, se *Session, req *Yield) error {
 	r := se.Realm()
 	store := getDealerStore(r)
+	store.mu.RLock()
+	defer store.mu.RUnlock()
 	caller, hasCaller := store.invocations[req.Request]
 	if !hasCaller {
 		return ErrNoCaller
@@ -191,6 +199,8 @@ func yield(ctx context.Context, se *Session, req *Yield) error {
 func invocationError(ctx context.Context, se *Session, req *Error) error {
 	r := se.Realm()
 	store := getDealerStore(r)
+	store.mu.RLock()
+	defer store.mu.RUnlock()
 	caller, hasCaller := store.invocations[req.Request]
 	if !hasCaller {
 		return ErrNoCaller

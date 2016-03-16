@@ -232,6 +232,11 @@ func (h *realmHandler) Handle(ctx context.Context, conn Conn, msg Message) conte
 		se.realm = nil
 		se.details = nil
 		return ctx
+	default:
+		// Client did not follow authentication procedure
+		if se.Realm() == nil {
+			handleProtocolViolation(ctx, conn)
+		}
 	}
 	return ctx
 }

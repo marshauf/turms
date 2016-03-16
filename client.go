@@ -315,6 +315,9 @@ func (c *Client) Unsubscribe(ctx context.Context, topic URI) error {
 
 func (c *Client) Publish(ctx context.Context, options Options, topic URI, args []interface{}, argsKW map[string]interface{}) error {
 	reqID := c.counter.Next()
+	if options == nil {
+		options = &PublishOption{}
+	}
 	msg := &Publish{PublishCode, reqID, options.Options(), topic, args, argsKW}
 
 	if options == nil {
